@@ -168,6 +168,7 @@ public class WeightedScalingMemoryDistributor implements InitialMemoryAllocator 
     Request request = new Request(context.getComponentClassName(), context.getRequestedSize(),
         requestType, typeScaleFactor);
     requests.add(request);
+    LOG.info("ScaleFactor: " + typeScaleFactor + ", for type: " + requestType);
     numRequestsScaled += typeScaleFactor;
   }
 
@@ -193,9 +194,7 @@ public class WeightedScalingMemoryDistributor implements InitialMemoryAllocator 
       requestType = RequestType.PARTITIONED_UNSORTED_OUTPUT;
     } else {
       requestType = RequestType.OTHER;
-      if (LOG.isDebugEnabled()) {
-        LOG.debug("Falling back to RequestType.OTHER for class: " + className);
-      }
+      LOG.info("Falling back to RequestType.OTHER for class: " + className);
     }
     return requestType;
   }
@@ -220,7 +219,6 @@ public class WeightedScalingMemoryDistributor implements InitialMemoryAllocator 
       }
     }
 
-    StringBuilder sb = new StringBuilder();
     Set<RequestType> seenTypes = new HashSet<RequestType>();
 
     for (String ratio : ratios) {
@@ -234,9 +232,7 @@ public class WeightedScalingMemoryDistributor implements InitialMemoryAllocator 
       }
       Preconditions.checkState(ratioVal >= 0, "Ratio must be >= 0");
       typeScaleMap.put(requestType, ratioVal);
-      sb.append("[").append(requestType).append(":").append(ratioVal).append("]");
     }
-    LOG.info("ScaleRatiosUsed=" + sb.toString());
   }
 
   private double computeReservedFraction(int numTotalRequests) {

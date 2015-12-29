@@ -31,9 +31,7 @@ import org.apache.hadoop.classification.InterfaceAudience.Public;
 public interface ProcessorContext extends TaskContext {
 
   /**
-   * Set the overall progress of this Task Attempt.
-   * This automatically results in invocation of {@link ProcessorContext#notifyProgress()} 
-   * and so invoking that separately is not required.
+   * Set the overall progress of this Task Attempt
    * @param progress Progress in the range from [0.0 - 1.0f]
    */
   public void setProgress(float progress);

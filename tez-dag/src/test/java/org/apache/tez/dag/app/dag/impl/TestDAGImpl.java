@@ -23,7 +23,6 @@ import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
 import java.io.IOException;
 import java.net.URL;
@@ -39,10 +38,6 @@ import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 
 import org.apache.commons.lang.StringUtils;
-import org.apache.tez.common.counters.Limits;
-import org.apache.tez.common.counters.TezCounters;
-import org.apache.tez.hadoop.shim.DefaultHadoopShim;
-import org.apache.tez.hadoop.shim.HadoopShim;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.hadoop.conf.Configuration;
@@ -93,7 +88,7 @@ import org.apache.tez.dag.api.records.DAGProtos.TezEntityDescriptorProto;
 import org.apache.tez.dag.api.records.DAGProtos.VertexPlan;
 import org.apache.tez.dag.app.AppContext;
 import org.apache.tez.dag.app.ClusterInfo;
-import org.apache.tez.dag.app.TaskCommunicatorManagerInterface;
+import org.apache.tez.dag.app.TaskAttemptListener;
 import org.apache.tez.dag.app.TaskHeartbeatHandler;
 import org.apache.tez.dag.app.dag.DAGScheduler;
 import org.apache.tez.dag.app.dag.DAGState;
@@ -170,7 +165,7 @@ public class TestDAGImpl {
   private TaskEventDispatcher taskEventDispatcher;
   private VertexEventDispatcher vertexEventDispatcher;
   private DagEventDispatcher dagEventDispatcher;
-  private TaskCommunicatorManagerInterface taskCommunicatorManagerInterface;
+  private TaskAttemptListener taskAttemptListener;
   private TaskHeartbeatHandler thh;
   private Clock clock = new SystemClock();
   private DAGFinishEventHandler dagFinishEventHandler;
@@ -189,15 +184,6 @@ public class TestDAGImpl {
   private HistoryEventHandler historyEventHandler;
   private TaskAttemptEventDispatcher taskAttemptEventDispatcher;
   private ClusterInfo clusterInfo = new ClusterInfo(Resource.newInstance(8192,10));
-  private HadoopShim defaultShim = new DefaultHadoopShim();
-
-  static {
-    Limits.reset();
-    Configuration conf = new Configuration(false);
-    conf.setInt(TezConfiguration.TEZ_COUNTERS_MAX, 100);
-    conf.setInt(TezConfiguration.TEZ_COUNTERS_MAX_GROUPS, 100);
-    Limits.setConfiguration(conf);
-  }
 
   private DAGImpl chooseDAG(TezDAGID curDAGId) {
     if (curDAGId.equals(dagId)) {
@@ -241,7 +227,6 @@ public class TestDAGImpl {
     }
   }
 
-  @SuppressWarnings("unchecked")
   private class TaskAttemptEventDisptacher2 implements EventHandler<TaskAttemptEvent> {
     @Override
     public void handle(TaskAttemptEvent event) {
@@ -759,76 +744,6 @@ public class TestDAGImpl {
     return dag;
   }
 
-  // v1 -> v2
-  private DAGPlan createDAGWithNonExistEdgeManager() {
-    LOG.info("Setting up dag plan with non-exist edgemanager");
-    DAGPlan dag = DAGPlan.newBuilder()
-        .setName("testverteximpl")
-        .addVertex(
-            VertexPlan.newBuilder()
-                .setName("vertex1")
-                .setType(PlanVertexType.NORMAL)
-                .addTaskLocationHint(
-                    PlanTaskLocationHint.newBuilder()
-                        .addHost("host1")
-                        .addRack("rack1")
-                        .build()
-                )
-                .setTaskConfig(
-                    PlanTaskConfiguration.newBuilder()
-                        .setNumTasks(1)
-                        .setVirtualCores(4)
-                        .setMemoryMb(1024)
-                        .setJavaOpts("")
-                        .setTaskModule("x1.y1")
-                        .build()
-                )
-                .addOutEdgeId("e1")
-                .build()
-        )
-          .addVertex(
-              VertexPlan.newBuilder()
-                  .setName("vertex2")
-                  .setType(PlanVertexType.NORMAL)
-                  .setProcessorDescriptor(
-                      TezEntityDescriptorProto.newBuilder().setClassName("x2.y2"))
-                  .addTaskLocationHint(
-                      PlanTaskLocationHint.newBuilder()
-                          .addHost("host2")
-                          .addRack("rack2")
-                          .build()
-                  )
-                  .setTaskConfig(
-                      PlanTaskConfiguration.newBuilder()
-                          .setNumTasks(2)
-                          .setVirtualCores(4)
-                          .setMemoryMb(1024)
-                          .setJavaOpts("foo")
-                          .setTaskModule("x2.y2")
-                          .build()
-                  )
-                  .addInEdgeId("e1")
-                  .build()
-          )
-         .addEdge(
-             EdgePlan.newBuilder()
-                 .setEdgeManager(TezEntityDescriptorProto.newBuilder()
-                         .setClassName("non-exist-edge-manager")
-                 )
-                 .setEdgeDestination(TezEntityDescriptorProto.newBuilder().setClassName("v1_v2"))
-                 .setInputVertexName("vertex1")
-                 .setEdgeSource(TezEntityDescriptorProto.newBuilder().setClassName("o1"))
-                 .setOutputVertexName("vertex2")
-                 .setDataMovementType(PlanEdgeDataMovementType.CUSTOM)
-                 .setId("e1")
-                 .setDataSourceType(PlanEdgeDataSourceType.PERSISTED)
-                 .setSchedulingType(PlanEdgeSchedulingType.SEQUENTIAL)
-                 .build()
-         )
-          .build();
-    return dag;
-  }
-
   @BeforeClass
   public static void beforeClass() {
     MockDNSToSwitchMapping.initializeMockRackResolver();
@@ -849,8 +764,6 @@ public class TestDAGImpl {
     appContext = mock(AppContext.class);
     execService = mock(ListeningExecutorService.class);
     final ListenableFuture<Void> mockFuture = mock(ListenableFuture.class);
-    when(appContext.getHadoopShim()).thenReturn(defaultShim);
-    when(appContext.getApplicationID()).thenReturn(appAttemptId.getApplicationId());
     
     Mockito.doAnswer(new Answer() {
       public ListenableFuture<Void> answer(InvocationOnMock invocation) {
@@ -870,9 +783,8 @@ public class TestDAGImpl {
     doReturn(dagId).when(appContext).getCurrentDAGID();
     doReturn(historyEventHandler).when(appContext).getHistoryHandler();
     doReturn(aclManager).when(appContext).getAMACLManager();
-    doReturn(defaultShim).when(appContext).getHadoopShim();
     dag = new DAGImpl(dagId, conf, dagPlan,
-        dispatcher.getEventHandler(), taskCommunicatorManagerInterface,
+        dispatcher.getEventHandler(),  taskAttemptListener,
         fsTokens, clock, "user", thh, appContext);
     dag.entityUpdateTracker = new StateChangeNotifierForTest(dag);
     doReturn(dag).when(appContext).getCurrentDAG();
@@ -880,12 +792,10 @@ public class TestDAGImpl {
     mrrAppContext = mock(AppContext.class);
     doReturn(aclManager).when(mrrAppContext).getAMACLManager();
     doReturn(execService).when(mrrAppContext).getExecService();
-    doReturn(defaultShim).when(mrrAppContext).getHadoopShim();
-
     mrrDagId = TezDAGID.getInstance(appAttemptId.getApplicationId(), 2);
     mrrDagPlan = createTestMRRDAGPlan();
     mrrDag = new DAGImpl(mrrDagId, conf, mrrDagPlan,
-        dispatcher.getEventHandler(), taskCommunicatorManagerInterface,
+        dispatcher.getEventHandler(),  taskAttemptListener,
         fsTokens, clock, "user", thh,
         mrrAppContext);
     mrrDag.entityUpdateTracker = new StateChangeNotifierForTest(mrrDag);
@@ -898,12 +808,10 @@ public class TestDAGImpl {
     groupAppContext = mock(AppContext.class);
     doReturn(aclManager).when(groupAppContext).getAMACLManager();
     doReturn(execService).when(groupAppContext).getExecService();
-    doReturn(defaultShim).when(groupAppContext).getHadoopShim();
-
     groupDagId = TezDAGID.getInstance(appAttemptId.getApplicationId(), 3);
     groupDagPlan = createGroupDAGPlan();
     groupDag = new DAGImpl(groupDagId, conf, groupDagPlan,
-        dispatcher.getEventHandler(), taskCommunicatorManagerInterface,
+        dispatcher.getEventHandler(),  taskAttemptListener,
         fsTokens, clock, "user", thh,
         groupAppContext);
     groupDag.entityUpdateTracker = new StateChangeNotifierForTest(groupDag);
@@ -972,9 +880,8 @@ public class TestDAGImpl {
     dagPlanWithCustomEdge = createDAGWithCustomEdge(exLocation, useLegacy);
     dagWithCustomEdgeAppContext = mock(AppContext.class);
     doReturn(aclManager).when(dagWithCustomEdgeAppContext).getAMACLManager();
-    when(dagWithCustomEdgeAppContext.getHadoopShim()).thenReturn(defaultShim);
     dagWithCustomEdge = new DAGImpl(dagWithCustomEdgeId, conf, dagPlanWithCustomEdge,
-        dispatcher.getEventHandler(), taskCommunicatorManagerInterface,
+        dispatcher.getEventHandler(),  taskAttemptListener,
         fsTokens, clock, "user", thh, dagWithCustomEdgeAppContext);
     dagWithCustomEdge.entityUpdateTracker = new StateChangeNotifierForTest(dagWithCustomEdge);
     doReturn(conf).when(dagWithCustomEdgeAppContext).getAMConf();
@@ -1030,7 +937,7 @@ public class TestDAGImpl {
     dispatcher.await();
     Assert.assertEquals(DAGState.FAILED, dag.getState());
     Assert.assertEquals(DAGTerminationCause.INIT_FAILURE, dag.getTerminationCause());
-    Assert.assertTrue(StringUtils.join(dag.getDiagnostics(), ",")
+    Assert.assertTrue(StringUtils.join(dag.getDiagnostics(),",")
         .contains("Vertex's TaskResource is beyond the cluster container capability"));
   }
 
@@ -1062,46 +969,11 @@ public class TestDAGImpl {
     }
   }
 
-  @Test(timeout = 5000)
-  public void testNonExistEdgeManagerPlugin() {
-    dagPlan = createDAGWithNonExistEdgeManager();
-    dag = new DAGImpl(dagId, conf, dagPlan,
-        dispatcher.getEventHandler(),  taskCommunicatorManagerInterface,
-        fsTokens, clock, "user", thh, appContext);
-    dag.entityUpdateTracker = new StateChangeNotifierForTest(dag);
-    doReturn(dag).when(appContext).getCurrentDAG();
-
-    dag.handle(new DAGEvent(dagId, DAGEventType.DAG_INIT));
-    Assert.assertEquals(DAGState.FAILED, dag.getState());
-    Assert.assertEquals(DAGTerminationCause.INIT_FAILURE, dag.getTerminationCause());
-    Assert.assertTrue(StringUtils.join(dag.getDiagnostics(), "")
-        .contains("java.lang.ClassNotFoundException: non-exist-edge-manager"));
-  }
-
-  @Test (timeout = 5000)
-  public void testNonExistDAGScheduler() {
-    conf.set(TezConfiguration.TEZ_AM_DAG_SCHEDULER_CLASS, "non-exist-dag-scheduler");
-    dag = new DAGImpl(dagId, conf, dagPlan,
-        dispatcher.getEventHandler(),  taskCommunicatorManagerInterface,
-        fsTokens, clock, "user", thh, appContext);
-    dag.entityUpdateTracker = new StateChangeNotifierForTest(dag);
-    doReturn(dag).when(appContext).getCurrentDAG();
-
-    dag.handle(new DAGEvent(dag.getID(), DAGEventType.DAG_INIT));
-    Assert.assertEquals(DAGState.FAILED, dag.getState());
-    Assert.assertEquals(DAGState.FAILED, dag.getState());
-    Assert.assertEquals(DAGTerminationCause.INIT_FAILURE, dag.getTerminationCause());
-    Assert.assertTrue(StringUtils.join(dag.getDiagnostics(), "")
-        .contains("java.lang.ClassNotFoundException: non-exist-dag-scheduler"));
-  }
-
   @SuppressWarnings("unchecked")
   @Test(timeout = 5000)
   public void testVertexCompletion() {
     initDAG(dag);
-    Assert.assertTrue(0.0f == dag.getCompletedTaskProgress());
     startDAG(dag);
-    Assert.assertTrue(0.0f == dag.getCompletedTaskProgress());
     dispatcher.await();
 
     TezVertexID vId = TezVertexID.getInstance(dagId, 1);
@@ -1114,10 +986,6 @@ public class TestDAGImpl {
 
     Assert.assertEquals(VertexState.SUCCEEDED, v.getState());
     Assert.assertEquals(1, dag.getSuccessfulVertices());
-
-    // 2 tasks completed, total plan has 11 vertices
-    Assert.assertEquals((float) 2 / 11,
-        dag.getCompletedTaskProgress(), 0.05);
   }
   
   @SuppressWarnings("unchecked")
@@ -1191,7 +1059,7 @@ public class TestDAGImpl {
     setupDAGWithCustomEdge(ExceptionLocation.RouteDataMovementEventToDestination, true);
     dispatcher.getEventHandler().handle(
         new DAGEvent(dagWithCustomEdge.getID(), DAGEventType.DAG_INIT));
-    dispatcher.getEventHandler().handle(new DAGEventStartDag(dagWithCustomEdge.getID(),
+    dispatcher.getEventHandler().handle(new DAGEventStartDag(dagWithCustomEdge.getID(), 
         null));
     dispatcher.await();
     Assert.assertEquals(DAGState.RUNNING, dagWithCustomEdge.getState());
@@ -1206,8 +1074,7 @@ public class TestDAGImpl {
     DataMovementEvent daEvent = DataMovementEvent.create(ByteBuffer.wrap(new byte[0]));
     TezEvent tezEvent = new TezEvent(daEvent, 
         new EventMetaData(EventProducerConsumerType.INPUT, "vertex1", "vertex2", ta1.getID()));
-    dispatcher.getEventHandler().handle(
-        new VertexEventRouteEvent(v2.getVertexId(), Lists.newArrayList(tezEvent)));
+    dispatcher.getEventHandler().handle(new VertexEventRouteEvent(v2.getVertexId(), Lists.newArrayList(tezEvent)));
     dispatcher.await();
 
     Assert.assertEquals(VertexState.FAILED, v2.getState());
@@ -1254,7 +1121,7 @@ public class TestDAGImpl {
     setupDAGWithCustomEdge(ExceptionLocation.GetNumDestinationConsumerTasks);
     dispatcher.getEventHandler().handle(
         new DAGEvent(dagWithCustomEdge.getID(), DAGEventType.DAG_INIT));
-    dispatcher.getEventHandler().handle(new DAGEventStartDag(dagWithCustomEdge.getID(),
+    dispatcher.getEventHandler().handle(new DAGEventStartDag(dagWithCustomEdge.getID(), 
         null));
     dispatcher.await();
     Assert.assertEquals(DAGState.RUNNING, dagWithCustomEdge.getState());
@@ -1269,8 +1136,7 @@ public class TestDAGImpl {
     InputReadErrorEvent ireEvent = InputReadErrorEvent.create("", 0, 0);
     TezEvent tezEvent = new TezEvent(ireEvent, 
         new EventMetaData(EventProducerConsumerType.INPUT,"vertex2", "vertex1", ta1.getID()));
-    dispatcher.getEventHandler().handle(
-        new VertexEventRouteEvent(v2.getVertexId(), Lists.newArrayList(tezEvent)));
+    dispatcher.getEventHandler().handle(new VertexEventRouteEvent(v2.getVertexId(), Lists.newArrayList(tezEvent)));
     dispatcher.await();
     // 
     Assert.assertEquals(VertexState.FAILED, v2.getState());
@@ -1326,7 +1192,6 @@ public class TestDAGImpl {
     }
     
     Assert.assertEquals(3, groupDag.getSuccessfulVertices());
-    Assert.assertTrue(1.0f == groupDag.getCompletedTaskProgress());
     Assert.assertEquals(DAGState.SUCCEEDED, groupDag.getState());
     Assert.assertEquals(2, TotalCountingOutputCommitter.totalCommitCounter);
   }  
@@ -1343,14 +1208,12 @@ public class TestDAGImpl {
     Vertex v2 = groupDag.getVertex("vertex2");
     dispatcher.getEventHandler().handle(new DAGEventVertexCompleted(v1.getVertexId(), VertexState.SUCCEEDED));
     dispatcher.getEventHandler().handle(new DAGEventVertexReRunning(v1.getVertexId()));
-    dispatcher.getEventHandler().handle(
-        new DAGEventVertexCompleted(v2.getVertexId(), VertexState.SUCCEEDED));
+    dispatcher.getEventHandler().handle(new DAGEventVertexCompleted(v2.getVertexId(), VertexState.SUCCEEDED));
     dispatcher.await();
     // commit should not happen due to vertex-rerunning
     Assert.assertEquals(0, TotalCountingOutputCommitter.totalCommitCounter);
 
-    dispatcher.getEventHandler().handle(
-        new DAGEventVertexCompleted(v1.getVertexId(), VertexState.SUCCEEDED));
+    dispatcher.getEventHandler().handle(new DAGEventVertexCompleted(v1.getVertexId(), VertexState.SUCCEEDED));
     dispatcher.await();
     // commit happen
     Assert.assertEquals(1, TotalCountingOutputCommitter.totalCommitCounter);
@@ -1444,10 +1307,10 @@ public class TestDAGImpl {
                 .newBuilder()
                 .setClassName(CountingOutputCommitter.class.getName())
                 .setTezUserPayload(DAGProtos.TezUserPayloadProto.newBuilder()
-                    .setUserPayload(
-                        ByteString
-                            .copyFrom(new CountingOutputCommitter.CountingOutputCommitterConfig(
-                                true, false, false).toUserPayload())).build()))
+                .setUserPayload(
+                    ByteString
+                        .copyFrom(new CountingOutputCommitter.CountingOutputCommitterConfig(
+                            true, false, false).toUserPayload())).build()))
         .setName("output3")
         .setIODescriptor(
             TezEntityDescriptorProto.newBuilder().setClassName("output.class")
@@ -1617,6 +1480,7 @@ public class TestDAGImpl {
     Assert.assertEquals(VertexState.SUCCEEDED, v.getState());
     Assert.assertEquals(1, dag.getSuccessfulVertices());
     Assert.assertEquals(1, dag.numCompletedVertices);
+    verify(dag.dagScheduler, times(1)).vertexCompleted(v);
     
     dispatcher.getEventHandler().handle(
         new VertexEventTaskReschedule(TezTaskID.getInstance(vId, 0)));
@@ -1633,6 +1497,9 @@ public class TestDAGImpl {
     Assert.assertEquals(1, dag.getSuccessfulVertices());
     Assert.assertEquals(1, dag.numCompletedVertices);
     
+    // re-completion is not notified again
+    verify(dag.dagScheduler, times(1)).vertexCompleted(v);
+
   }
 
   @SuppressWarnings("unchecked")
@@ -1871,8 +1738,13 @@ public class TestDAGImpl {
     }
   }
 
-  // Couple of vertices succeed. DAG_KILLED processed, which causes the rest of the vertices to be
-  // marked as KILLED.
+  // a dag.kill() on an active DAG races with vertices all succeeding.
+  // if a JOB_KILL is processed while dag is in running state, it should end in KILLED,
+  // regardless of whether all vertices complete
+  //
+  // Final state:
+  //   DAG is in KILLED state, with killTrigger = USER_KILL
+  //   Each vertex had kill triggered but raced ahead and ends in SUCCEEDED state.
   @SuppressWarnings("unchecked")
   @Test(timeout = 5000)
   public void testDAGKill() {
@@ -1888,70 +1760,22 @@ public class TestDAGImpl {
     dispatcher.getEventHandler().handle(new DAGEventVertexCompleted(
         TezVertexID.getInstance(dagId, 1), VertexState.SUCCEEDED));
     dispatcher.getEventHandler().handle(new DAGEvent(dagId, DAGEventType.DAG_KILL));
-    dispatcher.await();
-    Assert.assertEquals(DAGState.KILLED, dag.getState());
-    Assert.assertEquals(DAGTerminationCause.DAG_KILL, dag.getTerminationCause());
-    Assert.assertEquals(2, dag.getSuccessfulVertices());
-
-    int killedCount = 0;
-    for (Map.Entry<TezVertexID, Vertex> vEntry : dag.getVertices().entrySet()) {
-      if (vEntry.getValue().getState() == VertexState.KILLED) {
-        killedCount++;
-      }
-    }
-    Assert.assertEquals(4, killedCount);
-
-    for (Vertex v : dag.getVertices().values()) {
-      Assert.assertEquals(VertexTerminationCause.DAG_KILL, v.getTerminationCause());
-    }
-
-    Assert.assertEquals(1, dagFinishEventHandler.dagFinishEvents);
-  }
-
-  // Vertices succeed after a DAG kill has been processed. Should be ignored.
-  @SuppressWarnings("unchecked")
-  @Test(timeout = 5000)
-  public void testDAGKillVertexSuccessAfterKill() {
-    initDAG(dag);
-    startDAG(dag);
-    dispatcher.await();
-
-    dispatcher.getEventHandler().handle(new DAGEventVertexCompleted(
-        TezVertexID.getInstance(dagId, 0), VertexState.SUCCEEDED));
-    dispatcher.await();
-    Assert.assertEquals(DAGState.RUNNING, dag.getState());
-
-    dispatcher.getEventHandler().handle(new DAGEventVertexCompleted(
-        TezVertexID.getInstance(dagId, 1), VertexState.SUCCEEDED));
-    dispatcher.getEventHandler().handle(new DAGEvent(dagId, DAGEventType.DAG_KILL));
-    dispatcher.await();
-
-    Assert.assertEquals(DAGState.KILLED, dag.getState());
-
-    // Vertex SUCCESS gets processed after the DAG has reached the KILLED state. Should be ignored.
     for (int i = 2; i < 6; ++i) {
       dispatcher.getEventHandler().handle(new DAGEventVertexCompleted(
           TezVertexID.getInstance(dagId, i), VertexState.SUCCEEDED));
     }
     dispatcher.await();
-
-    int killedCount = 0;
-    for (Map.Entry<TezVertexID, Vertex> vEntry : dag.getVertices().entrySet()) {
-      if (vEntry.getValue().getState() == VertexState.KILLED) {
-        killedCount++;
-      }
-    }
-    Assert.assertEquals(4, killedCount);
-
+    Assert.assertEquals(DAGState.KILLED, dag.getState());
     Assert.assertEquals(DAGTerminationCause.DAG_KILL, dag.getTerminationCause());
-    Assert.assertEquals(2, dag.getSuccessfulVertices());
+    Assert.assertEquals(6, dag.getSuccessfulVertices());
     for (Vertex v : dag.getVertices().values()) {
       Assert.assertEquals(VertexTerminationCause.DAG_KILL, v.getTerminationCause());
     }
     Assert.assertEquals(1, dagFinishEventHandler.dagFinishEvents);
   }
 
-  // Vertex KILLED after a DAG_KILLED is issued. Termination reason should be DAG_KILLED
+  // job kill races with most vertices succeeding and one directly killed.
+  // because the job.kill() happens before the direct kill, the vertex has kill_trigger=DAG_KILL
   @SuppressWarnings("unchecked")
   @Test(timeout = 5000)
   public void testDAGKillPending() {
@@ -1966,13 +1790,12 @@ public class TestDAGImpl {
 
     dispatcher.getEventHandler().handle(new DAGEventVertexCompleted(
         TezVertexID.getInstance(dagId, 1), VertexState.SUCCEEDED));
+    dispatcher.getEventHandler().handle(new DAGEvent(dagId, DAGEventType.DAG_KILL));
 
     for (int i = 2; i < 5; ++i) {
       dispatcher.getEventHandler().handle(new DAGEventVertexCompleted(
           TezVertexID.getInstance(dagId, i), VertexState.SUCCEEDED));
     }
-    dispatcher.await();
-    dispatcher.getEventHandler().handle(new DAGEvent(dagId, DAGEventType.DAG_KILL));
     dispatcher.await();
     Assert.assertEquals(DAGState.KILLED, dag.getState());
 
@@ -1981,8 +1804,7 @@ public class TestDAGImpl {
     dispatcher.await();
     Assert.assertEquals(DAGState.KILLED, dag.getState());
     Assert.assertEquals(5, dag.getSuccessfulVertices());
-    Assert.assertEquals(dag.getVertex(TezVertexID.getInstance(dagId, 5)).getTerminationCause(),
-        VertexTerminationCause.DAG_KILL);
+    Assert.assertEquals(dag.getVertex(TezVertexID.getInstance(dagId, 5)).getTerminationCause(), VertexTerminationCause.DAG_KILL);
     Assert.assertEquals(1, dagFinishEventHandler.dagFinishEvents);
   }
 
@@ -2228,33 +2050,4 @@ public class TestDAGImpl {
       }
     }
   }
-
-  @SuppressWarnings("unchecked")
-  @Test(timeout = 5000)
-  public void testCounterLimits() {
-    initDAG(mrrDag);
-    dispatcher.await();
-    startDAG(mrrDag);
-    dispatcher.await();
-    for (int i=0; i<3; ++i) {
-      Vertex v = mrrDag.getVertex("vertex"+(i+1));
-      dispatcher.getEventHandler().handle(new VertexEventTaskCompleted(
-          TezTaskID.getInstance(v.getVertexId(), 0), TaskState.SUCCEEDED));
-      TezCounters ctrs = new TezCounters();
-      for (int j = 0; j < 50; ++j) {
-        ctrs.findCounter("g", "c" + i + "_" + j).increment(1);
-      }
-      ((VertexImpl) v).setCounters(ctrs);
-      dispatcher.await();
-      Assert.assertEquals(VertexState.SUCCEEDED, v.getState());
-      Assert.assertEquals(i+1, mrrDag.getSuccessfulVertices());
-    }
-
-    Assert.assertEquals(3, mrrDag.getSuccessfulVertices());
-    Assert.assertEquals(DAGState.FAILED, mrrDag.getState());
-    Assert.assertTrue("Diagnostics should contain counter limits error message",
-        StringUtils.join(mrrDag.getDiagnostics(), ",").contains("Counters limit exceeded"));
-
-  }
-
 }

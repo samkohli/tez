@@ -21,7 +21,6 @@ package org.apache.tez.examples;
 import java.io.IOException;
 import java.util.Set;
 
-import org.apache.tez.dag.api.Vertex.VertexExecutionContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.hadoop.conf.Configuration;
@@ -136,10 +135,7 @@ public class JoinValidate extends TezExampleBase {
 
   private DAG createDag(TezConfiguration tezConf, Path lhs, Path rhs, int numPartitions)
       throws IOException {
-    DAG dag = DAG.create(getDagName());
-    if (getDefaultExecutionContext() != null) {
-      dag.setExecutionContext(getDefaultExecutionContext());
-    }
+    DAG dag = DAG.create("JoinValidate");
 
     // Configuration for intermediate output - shared by Vertex1 and Vertex2
     // This should only be setting selective keys from the underlying conf. Fix after there's a
@@ -155,21 +151,16 @@ public class JoinValidate extends TezExampleBase {
         ForwardingProcessor.class.getName())).addDataSource("lhs",
         MRInput
             .createConfigBuilder(new Configuration(tezConf), TextInputFormat.class,
-                lhs.toUri().toString()).groupSplits(!isDisableSplitGrouping())
-                .generateSplitsInAM(!isGenerateSplitInClient()).build());
-    setVertexExecutionContext(lhsVertex, getLhsExecutionContext());
+                lhs.toUri().toString()).groupSplits(!isDisableSplitGrouping()).build());
 
     Vertex rhsVertex = Vertex.create(RHS_INPUT_NAME, ProcessorDescriptor.create(
         ForwardingProcessor.class.getName())).addDataSource("rhs",
         MRInput
             .createConfigBuilder(new Configuration(tezConf), TextInputFormat.class,
-                rhs.toUri().toString()).groupSplits(!isDisableSplitGrouping())
-                .generateSplitsInAM(!isGenerateSplitInClient()).build());
-    setVertexExecutionContext(rhsVertex, getRhsExecutionContext());
+                rhs.toUri().toString()).groupSplits(!isDisableSplitGrouping()).build());
 
     Vertex joinValidateVertex = Vertex.create("joinvalidate", ProcessorDescriptor.create(
         JoinValidateProcessor.class.getName()), numPartitions);
-    setVertexExecutionContext(joinValidateVertex, getValidateExecutionContext());
 
     Edge e1 = Edge.create(lhsVertex, joinValidateVertex, edgeConf.createDefaultEdgeProperty());
     Edge e2 = Edge.create(rhsVertex, joinValidateVertex, edgeConf.createDefaultEdgeProperty());
@@ -177,40 +168,6 @@ public class JoinValidate extends TezExampleBase {
     dag.addVertex(lhsVertex).addVertex(rhsVertex).addVertex(joinValidateVertex).addEdge(e1)
         .addEdge(e2);
     return dag;
-  }
-
-  private void setVertexExecutionContext(Vertex vertex, VertexExecutionContext executionContext) {
-    if (executionContext != null) {
-      vertex.setExecutionContext(executionContext);
-    }
-  }
-
-  // This is for internal use only, to use this example for external service testing.
-  // Not meant as documentation for the example.
-  protected VertexExecutionContext getDefaultExecutionContext() {
-    return null;
-  }
-
-  // This is for internal use only, to use this example for external service testing.
-  // Not meant as documentation for the example.
-  protected VertexExecutionContext getLhsExecutionContext() {
-    return null;
-  }
-
-  // This is for internal use only, to use this example for external service testing.
-  // Not meant as documentation for the example.
-  protected VertexExecutionContext getRhsExecutionContext() {
-    return null;
-  }
-
-  // This is for internal use only, to use this example for external service testing.
-  // Not meant as documentation for the example.
-  protected VertexExecutionContext getValidateExecutionContext() {
-    return null;
-  }
-
-  protected String getDagName() {
-    return "JoinValidate";
   }
 
   public static class JoinValidateProcessor extends SimpleProcessor {
@@ -255,6 +212,4 @@ public class JoinValidate extends TezExampleBase {
       }
     }
   }
-
-
 }

@@ -55,8 +55,8 @@ public class DAGSubmittedEvent implements HistoryEvent, SummaryEvent {
   private String user;
   private Map<String, LocalResource> cumulativeAdditionalLocalResources;
   private boolean historyLoggingEnabled = true;
+
   private Configuration conf;
-  private String containerLogs;
 
   public DAGSubmittedEvent() {
   }
@@ -64,7 +64,7 @@ public class DAGSubmittedEvent implements HistoryEvent, SummaryEvent {
   public DAGSubmittedEvent(TezDAGID dagID, long submitTime,
       DAGProtos.DAGPlan dagPlan, ApplicationAttemptId applicationAttemptId,
       Map<String, LocalResource> cumulativeAdditionalLocalResources,
-      String user, Configuration conf, String containerLogs) {
+      String user, Configuration conf) {
     this.dagID = dagID;
     this.dagName = dagPlan.getName();
     this.submitTime = submitTime;
@@ -73,7 +73,6 @@ public class DAGSubmittedEvent implements HistoryEvent, SummaryEvent {
     this.cumulativeAdditionalLocalResources = cumulativeAdditionalLocalResources;
     this.user = user;
     this.conf = conf;
-    this.containerLogs = containerLogs;
   }
 
   @Override
@@ -198,9 +197,5 @@ public class DAGSubmittedEvent implements HistoryEvent, SummaryEvent {
 
   public boolean isHistoryLoggingEnabled() {
     return historyLoggingEnabled;
-  }
-
-  public String getContainerLogs() {
-    return containerLogs;
   }
 }

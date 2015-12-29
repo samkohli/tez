@@ -157,8 +157,7 @@ public class HashJoinExample extends TezExampleBase {
                 MRInput
                     .createConfigBuilder(new Configuration(tezConf),
                         TextInputFormat.class, hashPath.toUri().toString())
-                    .groupSplits(!isDisableSplitGrouping())
-                    .generateSplitsInAM(!isGenerateSplitInClient()).build());
+                    .groupSplits(!isDisableSplitGrouping()).build());
 
     /**
      * This vertex represents that side of the data that will be streamed and
@@ -174,8 +173,7 @@ public class HashJoinExample extends TezExampleBase {
                 MRInput
                     .createConfigBuilder(new Configuration(tezConf),
                         TextInputFormat.class, streamPath.toUri().toString())
-                    .groupSplits(!isDisableSplitGrouping())
-                    .generateSplitsInAM(!isGenerateSplitInClient()).build());
+                    .groupSplits(!isDisableSplitGrouping()).build());
 
     /**
      * This vertex represents the join operation. It writes the join output as

@@ -39,13 +39,4 @@
       </binaries>
     </moduleSet>
   </moduleSets>
-  <fileSets>
-    <fileSet>
-      <directory>dist-files/full/</directory>
-      <outputDirectory>/</outputDirectory>
-      <includes>
-        <include>**</include>
-      </includes>
-    </fileSet>
-  </fileSets>
 </assembly>

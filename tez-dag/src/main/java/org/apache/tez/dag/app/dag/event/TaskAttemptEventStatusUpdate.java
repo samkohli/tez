@@ -24,7 +24,6 @@ import org.apache.tez.runtime.api.events.TaskStatusUpdateEvent;
 public class TaskAttemptEventStatusUpdate extends TaskAttemptEvent {
   
   private TaskStatusUpdateEvent taskAttemptStatus;
-  private boolean readErrorReported = false;
   
   public TaskAttemptEventStatusUpdate(TezTaskAttemptID id,
       TaskStatusUpdateEvent statusEvent) {
@@ -34,13 +33,5 @@ public class TaskAttemptEventStatusUpdate extends TaskAttemptEvent {
   
   public TaskStatusUpdateEvent getStatusEvent() {
     return this.taskAttemptStatus;
-  }
-  
-  public void setReadErrorReported(boolean value) {
-    readErrorReported = value;
-  }
-  
-  public boolean getReadErrorReported() {
-    return readErrorReported;
   }
 }

@@ -27,6 +27,7 @@ import javax.annotation.Nullable;
 
 import org.apache.hadoop.classification.InterfaceAudience.Public;
 import org.apache.hadoop.classification.InterfaceStability.Unstable;
+import org.apache.hadoop.yarn.api.records.Container;
 import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.tez.dag.api.event.VertexState;
 import org.apache.tez.runtime.api.InputSpecUpdate;
@@ -42,35 +43,11 @@ import com.google.common.base.Preconditions;
 @Public
 public interface VertexManagerPluginContext {
   
-  public class ScheduleTaskRequest {
-    int taskIndex;
-    TaskLocationHint locationHint;
-
-    public static ScheduleTaskRequest create(int taskIndex, @Nullable TaskLocationHint locationHint) {
-      return new ScheduleTaskRequest(taskIndex, locationHint); 
-    }
-    
-    private ScheduleTaskRequest(int taskIndex, @Nullable TaskLocationHint locationHint) {
-      Preconditions.checkState(taskIndex >= 0);
-      this.taskIndex = taskIndex;
-      this.locationHint = locationHint;
-    }
-    
-    public int getTaskIndex() {
-      return taskIndex;
-    }
-    
-    public TaskLocationHint getTaskLocationHint() {
-      return locationHint;
-    }    
-  }
-  
-  @Deprecated
   public class TaskWithLocationHint {
     Integer taskIndex;
     TaskLocationHint locationHint;
     public TaskWithLocationHint(Integer taskIndex, @Nullable TaskLocationHint locationHint) {
-      Preconditions.checkState(taskIndex != null);
+      Preconditions.checkNotNull(taskIndex);
       this.taskIndex = taskIndex;
       this.locationHint = locationHint;
     }
@@ -136,6 +113,14 @@ public interface VertexManagerPluginContext {
   Resource getVertexTaskResource();
   
   /**
+   * Get the container for the successful attempt of the task
+   * @return YARN container for the successful task. Maybe null if there is no
+   * successful task.
+   */
+  @Deprecated
+  public Container getTaskContainer(String vertexName, Integer taskIndex);
+  
+  /**
    * Get the total resource allocated to this vertex. If the DAG is running in 
    * a busy cluster then it may have no resources available dedicated to it. The
    * DAG may divide its available resource among member vertices.
@@ -167,43 +152,6 @@ public interface VertexManagerPluginContext {
       @Nullable Map<String, EdgeManagerPluginDescriptor> sourceEdgeManagers,
       @Nullable Map<String, InputSpecUpdate> rootInputSpecUpdate);
 
-  /**
-   * API to reconfigure a {@link Vertex} that is reading root inputs based on
-   * the data read from the root inputs. Root inputs are external data sources
-   * that provide the initial data for the DAG and are added to the
-   * {@link Vertex} using the
-   * {@link Vertex#addDataSource(String, DataSourceDescriptor)} API. Typically,
-   * the parallelism of such vertices is determined at runtime by gathering
-   * information about the data source. This API may be used to set the
-   * parallelism of the vertex at runtime based on the data sources, as well as
-   * changing the specification for those inputs. In addition, changing
-   * parallelism is often accompanied by changing the {@link EdgeProperty} of
-   * the source {@link Edge} because event routing between source and
-   * destination tasks may need to be updated to account for the new task
-   * parallelism. This method can be called to update the parallelism multiple
-   * times until any of the tasks of the vertex have been scheduled (by invoking
-   * {@link #scheduleTasks(List)}. If needed, the original source edge
-   * properties may be obtained via {@link #getInputVertexEdgeProperties()}
-   * 
-   * @param parallelism
-   *          New number of tasks in the vertex
-   * @param locationHint
-   *          the placement policy for tasks specified at
-   *          {@link VertexLocationHint}s
-   * @param sourceEdgeProperties
-   *          Map with Key=name of {@link Edge} to be updated and Value=
-   *          {@link EdgeProperty}. The name of the Edge will be the
-   *          corresponding source vertex name.
-   * @param rootInputSpecUpdate
-   *          The key of the map is the name of the data source and the value is
-   *          the updated {@link InputSpecUpdate} for that data source. If none
-   *          specified, a default value is used. See {@link InputSpecUpdate}
-   *          for details.
-   */
-  public void reconfigureVertex(int parallelism,
-      @Nullable VertexLocationHint locationHint,
-      @Nullable Map<String, EdgeProperty> sourceEdgeProperties,
-      @Nullable Map<String, InputSpecUpdate> rootInputSpecUpdate);
   
   /**
    * API to reconfigure a {@link Vertex} by changing its task parallelism. Task
@@ -212,7 +160,7 @@ public interface VertexManagerPluginContext {
    * destination tasks may need to be updated to account for the new task
    * parallelism. This method can be called to update the parallelism multiple
    * times until any of the tasks of the vertex have been scheduled (by invoking
-   * {@link #scheduleTasks(List)}. If needed, the original source edge
+   * {@link #scheduleVertexTasks(List)}. If needed, the original source edge
    * properties may be obtained via {@link #getInputVertexEdgeProperties()}
    * 
    * @param parallelism
@@ -269,20 +217,12 @@ public interface VertexManagerPluginContext {
    */
   public void addRootInputEvents(String inputName, Collection<InputDataInformationEvent> events);
   
-  @Deprecated
   /**
-   * Replaced by {@link #scheduleTasks(List)}
    * Notify the vertex to start the given tasks
    * @param tasks Indices of the tasks to be started
    */
   public void scheduleVertexTasks(List<TaskWithLocationHint> tasks);
   
-  /**
-   * Notify the vertex to schedule the given tasks
-   * @param tasks Identifier and metadata for the tasks to schedule
-   */
-  public void scheduleTasks(List<ScheduleTaskRequest> tasks);
-
   /**
    * Get the names of the non-vertex inputs of this vertex. These are primary 
    * sources of data.

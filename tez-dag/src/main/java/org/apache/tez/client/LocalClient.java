@@ -134,11 +134,7 @@ public class LocalClient extends FrameworkClient {
 
   @Override
   public void killApplication(ApplicationId appId) {
-    try {
-      clientHandler.shutdownAM();
-    } catch (TezException e) {
-      throw new RuntimeException(e);
-    }
+    clientHandler.shutdownAM();
   }
 
   @Override
@@ -268,7 +264,6 @@ public class LocalClient extends FrameworkClient {
     }
   }
 
-  @SuppressWarnings("deprecation")
   protected Thread createDAGAppMaster(final ApplicationSubmissionContext appContext) {
     Thread thread = new Thread(new Runnable() {
       @Override
@@ -342,7 +337,7 @@ public class LocalClient extends FrameworkClient {
       String[] localDirs, String[] logDirs, Credentials credentials, String jobUserName) {
     return new DAGAppMaster(applicationAttemptId, cId, currentHost, nmPort, nmHttpPort,
         new SystemClock(), appSubmitTime, isSession, userDir, localDirs, logDirs,
-        versionInfo.getVersion(), 1, credentials, jobUserName, null);
+        versionInfo.getVersion(), 1, credentials, jobUserName);
   }
 
 }

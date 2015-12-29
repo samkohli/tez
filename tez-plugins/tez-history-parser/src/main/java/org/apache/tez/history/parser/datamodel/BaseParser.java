@@ -85,11 +85,11 @@ public abstract class BaseParser {
 
     //Set reference time for all events
     for (VertexInfo vertexInfo : dagInfo.getVertices()) {
-      setReferenceTime(vertexInfo.getEvents(), dagInfo.getStartTimeInterval());
+      setReferenceTime(vertexInfo.getEvents(), dagInfo.getStartTime());
       for (TaskInfo taskInfo : vertexInfo.getTasks()) {
-        setReferenceTime(taskInfo.getEvents(), dagInfo.getStartTimeInterval());
+        setReferenceTime(taskInfo.getEvents(), dagInfo.getStartTime());
         for (TaskAttemptInfo taskAttemptInfo : taskInfo.getTaskAttempts()) {
-          setReferenceTime(taskAttemptInfo.getEvents(), dagInfo.getStartTimeInterval());
+          setReferenceTime(taskAttemptInfo.getEvents(), dagInfo.getStartTime());
         }
       }
     }

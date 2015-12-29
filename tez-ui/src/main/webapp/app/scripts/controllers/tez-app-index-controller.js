@@ -16,13 +16,13 @@
  * limitations under the License.
  */
 
-App.TezAppIndexController = App.PollingController.extend(App.ModelRefreshMixin, {
+App.TezAppIndexController = Em.ObjectController.extend(App.ModelRefreshMixin, {
 
   needs: "tezApp",
   controllerName: 'TezAppIndexController',
 
   rmTrackingURL: function() {
-    return "%@/%@/app/%@".fmt(App.env.RMWebUrl, App.Configs.otherNamespace.cluster, this.get('appId'));
+    return App.env.RMWebUrl + '/cluster/app/' + this.get('appId');
   }.property('appId'),
 
   load: function () {
@@ -32,23 +32,20 @@ App.TezAppIndexController = App.PollingController.extend(App.ModelRefreshMixin, 
       tezApp.reload().then(function (tezApp) {
         var appId = tezApp.get('appId');
         if(!appId) return tezApp;
-        return App.Helpers.misc.loadApp(store, appId).then(function (appDetails){
+        App.Helpers.misc.removeRecord(store, 'appDetail', appId);
+        return store.find('appDetail', appId).then(function (appDetails){
           tezApp.set('appDetail', appDetails);
           return tezApp;
         });
       }).catch(function (error) {
         Em.Logger.error(error);
-        var err = App.Helpers.misc.formatError(error);
+        var err = App.Helpers.misc.formatError(error, defaultErrMsg);
         var msg = 'error code: %@, message: %@'.fmt(err.errCode, err.msg);
         App.Helpers.ErrorBar.getInstance().show(msg, err.details);
       });
   },
 
-  appUser: function() {
-    return this.get('appDetail.user') || this.get('user');
-  }.property('appDetail.user', 'user'),
-
   iconStatus: function() {
-    return App.Helpers.misc.getStatusClassForEntity(this.get('model.appDetail.finalStatus'));
-  }.property('id', 'appDetail.finalStatus'),
+    return App.Helpers.misc.getStatusClassForEntity(this.get('model.appDetail.finalAppStatus'));
+  }.property('id', 'appDetail.finalAppStatus'),
 });

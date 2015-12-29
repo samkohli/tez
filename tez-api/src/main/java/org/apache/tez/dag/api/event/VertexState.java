@@ -56,10 +56,5 @@ public enum VertexState {
    * further. Listeners can depend on the vertex's configured state after
    * receiving this notification.
    */
-  CONFIGURED,
-
-  /**
-   * Indicates that the Vertex move to INITIALIZING
-   */
-  INITIALIZING
+  CONFIGURED
 }

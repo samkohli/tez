@@ -49,11 +49,9 @@ import org.apache.hadoop.util.GenericOptionsParser;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 import org.apache.hadoop.yarn.api.records.LocalResource;
-import org.apache.tez.client.CallerContext;
 import org.apache.tez.client.TezClientUtils;
 import org.apache.tez.client.TezClient;
 import org.apache.tez.common.TezUtils;
-import org.apache.tez.common.TezUtilsInternal;
 import org.apache.tez.common.security.DAGAccessControls;
 import org.apache.tez.dag.api.DAG;
 import org.apache.tez.dag.api.DataSourceDescriptor;
@@ -67,8 +65,6 @@ import org.apache.tez.dag.api.Vertex;
 import org.apache.tez.dag.api.client.DAGClient;
 import org.apache.tez.dag.api.client.DAGStatus;
 import org.apache.tez.dag.api.client.StatusGetOpts;
-import org.apache.tez.hadoop.shim.HadoopShim;
-import org.apache.tez.hadoop.shim.HadoopShimsLoader;
 import org.apache.tez.mapreduce.examples.helpers.SplitsInClientOptionParser;
 import org.apache.tez.mapreduce.hadoop.MRHelpers;
 import org.apache.tez.mapreduce.hadoop.MRInputHelpers;
@@ -280,6 +276,7 @@ public class TestOrderedWordCount extends Configured implements Tool {
     vertices.add(finalReduceVertex);
 
     DAG dag = DAG.create("OrderedWordCount" + dagIndex);
+    dag.setDAGInfo("{ \"context\": \"Tez\", \"description\": \"TestOrderedWordCount Job\" }");
     for (int i = 0; i < vertices.size(); ++i) {
       dag.addVertex(vertices.get(i));
     }
@@ -376,8 +373,8 @@ public class TestOrderedWordCount extends Configured implements Tool {
     }
 
     UserGroupInformation.setConfiguration(conf);
+
     TezConfiguration tezConf = new TezConfiguration(conf);
-    HadoopShim hadoopShim = new HadoopShimsLoader(tezConf).getHadoopShim();
     TestOrderedWordCount instance = new TestOrderedWordCount();
 
     FileSystem fs = FileSystem.get(conf);
@@ -410,9 +407,6 @@ public class TestOrderedWordCount extends Configured implements Tool {
     TezClient tezSession = TezClient.create("OrderedWordCountSession", tezConf,
         null, instance.credentials);
     tezSession.start();
-    if (tezSession.getAppMasterApplicationId() != null) {
-      TezUtilsInternal.setHadoopCallerContext(hadoopShim, tezSession.getAppMasterApplicationId());
-    }
 
     DAGStatus dagStatus = null;
     DAGClient dagClient = null;
@@ -452,12 +446,6 @@ public class TestOrderedWordCount extends Configured implements Tool {
         DAG dag = instance.createDAG(fs, tezConf, localResources,
             stagingDir, dagIndex, inputPath, outputPath,
             generateSplitsInClient, useMRSettings, intermediateNumReduceTasks);
-        String callerType = "TestOrderedWordCount";
-        String callerId = tezSession.getAppMasterApplicationId() == null ?
-            ( "UnknownApp_" + System.currentTimeMillis() + dagIndex ) :
-            ( tezSession.getAppMasterApplicationId().toString() + "_" + dagIndex);
-        dag.setCallerContext(CallerContext.create("Tez", callerId, callerType,
-            "TestOrderedWordCount Job"));
 
         boolean doPreWarm = dagIndex == 1 && useTezSession
             && conf.getBoolean("PRE_WARM_SESSION", true);

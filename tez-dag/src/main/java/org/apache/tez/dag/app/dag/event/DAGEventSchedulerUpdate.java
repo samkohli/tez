@@ -24,7 +24,8 @@ public class DAGEventSchedulerUpdate extends DAGEvent {
   
   public enum UpdateType {
     TA_SCHEDULE,
-    TA_COMPLETED
+    TA_SCHEDULED,
+    TA_SUCCEEDED
   }
   
   private final TaskAttempt attempt;

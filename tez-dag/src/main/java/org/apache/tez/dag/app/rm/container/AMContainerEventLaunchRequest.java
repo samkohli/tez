@@ -27,17 +27,12 @@ public class AMContainerEventLaunchRequest extends AMContainerEvent {
 
   private final TezVertexID vertexId;
   private final ContainerContext containerContext;
-  private final int launcherId;
-  private final int taskCommId;
 
   public AMContainerEventLaunchRequest(ContainerId containerId,
-      TezVertexID vertexId, ContainerContext containerContext,
-      int launcherId, int taskCommId) {
+      TezVertexID vertexId, ContainerContext containerContext) {
     super(containerId, AMContainerEventType.C_LAUNCH_REQUEST);
     this.vertexId = vertexId;
     this.containerContext = containerContext;
-    this.launcherId = launcherId;
-    this.taskCommId = taskCommId;
   }
 
   public TezDAGID getDAGId() {
@@ -50,13 +45,5 @@ public class AMContainerEventLaunchRequest extends AMContainerEvent {
 
   public ContainerContext getContainerContext() {
     return this.containerContext;
-  }
-
-  public int getLauncherId() {
-    return launcherId;
-  }
-
-  public int getTaskCommId() {
-    return taskCommId;
   }
 }

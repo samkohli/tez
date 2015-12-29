@@ -84,6 +84,7 @@ import org.apache.tez.runtime.api.ProcessorContext;
 import org.apache.tez.runtime.library.common.Constants;
 import org.apache.tez.runtime.library.common.sort.impl.TezRawKeyValueIterator;
 
+@SuppressWarnings("deprecation")
 @Private
 public abstract class MRTask extends AbstractLogicalIOProcessor {
 
@@ -264,7 +265,6 @@ public abstract class MRTask extends AbstractLogicalIOProcessor {
    * @param job
    * @throws IOException
    */
-  @SuppressWarnings("deprecation")
   private static void setupDistributedCacheConfig(final JobConf job)
       throws IOException {
 

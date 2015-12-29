@@ -22,7 +22,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 
 import org.apache.tez.dag.api.DagTypeConverters;
@@ -32,14 +31,9 @@ import org.apache.tez.dag.api.RootInputLeafOutput;
 import org.apache.tez.dag.api.records.DAGProtos.RootInputLeafOutputProto;
 import org.apache.tez.dag.history.HistoryEvent;
 import org.apache.tez.dag.history.HistoryEventType;
-import org.apache.tez.dag.history.utils.TezEventUtils;
 import org.apache.tez.dag.records.TezVertexID;
 import org.apache.tez.dag.recovery.records.RecoveryProtos;
-import org.apache.tez.dag.recovery.records.RecoveryProtos.TezEventProto;
 import org.apache.tez.dag.recovery.records.RecoveryProtos.VertexInitializedProto;
-import org.apache.tez.runtime.api.impl.TezEvent;
-
-import com.google.common.collect.Lists;
 
 public class VertexInitializedEvent implements HistoryEvent {
 
@@ -50,7 +44,6 @@ public class VertexInitializedEvent implements HistoryEvent {
   private int numTasks;
   private String processorName;
   private Map<String, RootInputLeafOutput<InputDescriptor, InputInitializerDescriptor>> additionalInputs;
-  private List<TezEvent> initGeneratedEvents;
 
   public VertexInitializedEvent() {
   }
@@ -58,8 +51,7 @@ public class VertexInitializedEvent implements HistoryEvent {
   public VertexInitializedEvent(TezVertexID vertexId,
       String vertexName, long initRequestedTime, long initedTime,
       int numTasks, String processorName,
-      Map<String, RootInputLeafOutput<InputDescriptor, InputInitializerDescriptor>> additionalInputs,
-      List<TezEvent> initGeneratedEvents) {
+      Map<String, RootInputLeafOutput<InputDescriptor, InputInitializerDescriptor>> additionalInputs) {
     this.vertexName = vertexName;
     this.vertexID = vertexId;
     this.initRequestedTime = initRequestedTime;
@@ -67,7 +59,6 @@ public class VertexInitializedEvent implements HistoryEvent {
     this.numTasks = numTasks;
     this.processorName = processorName;
     this.additionalInputs = additionalInputs;
-    this.initGeneratedEvents = initGeneratedEvents;
   }
 
   @Override
@@ -85,7 +76,7 @@ public class VertexInitializedEvent implements HistoryEvent {
     return true;
   }
 
-  public RecoveryProtos.VertexInitializedProto toProto() throws IOException {
+  public RecoveryProtos.VertexInitializedProto toProto() {
     VertexInitializedProto.Builder builder = VertexInitializedProto.newBuilder();
     if (additionalInputs != null
       && !additionalInputs.isEmpty()) {
@@ -103,11 +94,6 @@ public class VertexInitializedEvent implements HistoryEvent {
         builder.addInputs(inputBuilder.build());
       }
     }
-    if (initGeneratedEvents != null && !initGeneratedEvents.isEmpty()) {
-      for (TezEvent event : initGeneratedEvents) {
-        builder.addInitGeneratedEvents(TezEventUtils.toProto(event));
-      }
-    }
     return builder.setVertexId(vertexID.toString())
         .setVertexName(vertexName)
         .setInitRequestedTime(initRequestedTime)
@@ -116,7 +102,7 @@ public class VertexInitializedEvent implements HistoryEvent {
         .build();
   }
 
-  public void fromProto(RecoveryProtos.VertexInitializedProto proto) throws IOException {
+  public void fromProto(RecoveryProtos.VertexInitializedProto proto) {
     this.vertexID = TezVertexID.fromString(proto.getVertexId());
     this.vertexName = proto.getVertexName();
     this.initRequestedTime = proto.getInitRequestedTime();
@@ -136,14 +122,6 @@ public class VertexInitializedEvent implements HistoryEvent {
                         .getControllerDescriptor()) : null);
         additionalInputs.put(input.getName(), input);
       }
-    }
-    int eventCount = proto.getInitGeneratedEventsCount();
-    if (eventCount > 0) {
-      this.initGeneratedEvents = Lists.newArrayListWithCapacity(eventCount);
-    }
-    for (TezEventProto eventProto :
-        proto.getInitGeneratedEventsList()) {
-      this.initGeneratedEvents.add(TezEventUtils.fromProto(eventProto));
     }
   }
 
@@ -171,9 +149,7 @@ public class VertexInitializedEvent implements HistoryEvent {
         + ", numTasks=" + numTasks
         + ", processorName=" + processorName
         + ", additionalInputsCount="
-        + (additionalInputs != null ? additionalInputs.size() : 0)
-        + ", initGeneratedEventsCount="
-        + (initGeneratedEvents != null ? initGeneratedEvents.size() : 0);
+        + (additionalInputs != null ? additionalInputs.size() : 0);
   }
 
   public TezVertexID getVertexID() {
@@ -205,7 +181,4 @@ public class VertexInitializedEvent implements HistoryEvent {
     return vertexName;
   }
 
-  public List<TezEvent> getInitGeneratedEvents() {
-    return initGeneratedEvents;
-  }
 }

@@ -21,7 +21,7 @@
   <parent>
     <groupId>org.apache.tez</groupId>
     <artifactId>tez</artifactId>
-    <version>0.8.2-SNAPSHOT</version>
+    <version>0.8.0-SNAPSHOT</version>
   </parent>
   <artifactId>tez-plugins</artifactId>
   <packaging>pom</packaging>
@@ -48,6 +48,30 @@
         <module>tez-yarn-timeline-history</module>
         <module>tez-yarn-timeline-history-with-acls</module>
         <module>tez-history-parser</module>
+      </modules>
+    </profile>
+    <profile>
+      <id>jdk6check</id>
+      <activation>
+        <property>
+          <name>java.vendor.url</name>
+          <value>http://java.sun.com/</value>
+        </property>
+      </activation>
+      <modules>
+        <module>tez-mbeans-resource-calculator</module>
+      </modules>
+    </profile>
+    <profile>
+      <id>jdk7check</id>
+      <activation>
+        <property>
+          <name>java.vendor.url</name>
+          <value>http://java.oracle.com/</value>
+        </property>
+      </activation>
+      <modules>
+        <module>tez-mbeans-resource-calculator</module>
       </modules>
     </profile>
   </profiles>

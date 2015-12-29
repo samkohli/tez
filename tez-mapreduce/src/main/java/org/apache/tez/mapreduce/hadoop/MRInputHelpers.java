@@ -284,27 +284,21 @@ public class MRInputHelpers {
     InputSplitInfoMem splitInfoMem = null;
     JobConf jobConf = new JobConf(conf);
     if (jobConf.getUseNewMapper()) {
-      if (LOG.isDebugEnabled()) {
-        LOG.debug("Generating mapreduce api input splits");
-      }
+      LOG.info("Generating mapreduce api input splits");
       Job job = Job.getInstance(conf);
       org.apache.hadoop.mapreduce.InputSplit[] splits =
           generateNewSplits(job, groupSplits, targetTasks);
       splitInfoMem = new InputSplitInfoMem(splits, createTaskLocationHintsFromSplits(splits),
           splits.length, job.getCredentials(), job.getConfiguration());
     } else {
-      if (LOG.isDebugEnabled()) {
-        LOG.debug("Generating mapred api input splits");
-      }
+      LOG.info("Generating mapred api input splits");
       org.apache.hadoop.mapred.InputSplit[] splits =
           generateOldSplits(jobConf, groupSplits, targetTasks);
       splitInfoMem = new InputSplitInfoMem(splits, createTaskLocationHintsFromSplits(splits),
           splits.length, jobConf.getCredentials(), jobConf);
     }
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("NumSplits: " + splitInfoMem.getNumTasks() + ", SerializedSize: "
-          + splitInfoMem.getSplitsProto().getSerializedSize());
-    }
+    LOG.info("NumSplits: " + splitInfoMem.getNumTasks() + ", SerializedSize: "
+        + splitInfoMem.getSplitsProto().getSerializedSize());
     return splitInfoMem;
   }
 

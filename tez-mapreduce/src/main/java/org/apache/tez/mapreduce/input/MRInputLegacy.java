@@ -73,7 +73,7 @@ public class MRInputLegacy extends MRInput {
 
   @Private
   protected void initializeInternal() throws IOException {
-    LOG.info(getContext().getSourceVertexName() + " MRInputLegacy deferring initialization");
+    LOG.info("MRInputLegacy deferring initialization");
   }
   
   @Private
@@ -130,11 +130,7 @@ public class MRInputLegacy extends MRInput {
       }
       if (splitInfoViaEvents && !inited) {
         if (initEvent == null) {
-          if (LOG.isDebugEnabled()) {
-            LOG.debug(getContext().getSourceVertexName() +
-                " awaiting init event before initializing record reader");
-          }
-
+          LOG.info("Awaiting init event before initializing record reader");
           try {
             eventCondition.await();
           } catch (InterruptedException e) {

@@ -24,7 +24,6 @@ import java.util.Comparator;
 import java.util.List;
 
 import com.google.common.annotations.VisibleForTesting;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.hadoop.classification.InterfaceAudience;
@@ -50,7 +49,6 @@ import org.apache.tez.runtime.library.common.sort.impl.IFile.Reader;
 import org.apache.tez.runtime.library.common.sort.impl.IFile.Reader.KeyState;
 import org.apache.tez.runtime.library.common.sort.impl.IFile.Writer;
 import org.apache.tez.runtime.library.utils.BufferUtils;
-import org.apache.tez.runtime.library.utils.LocalProgress;
 
 /**
  * Merger is an utility class used by the Map and Reduce tasks for merging
@@ -404,7 +402,7 @@ public class TezMerger {
 
     private long totalBytesProcessed;
     private float progPerByte;
-    private Progress mergeProgress = new LocalProgress();
+    private Progress mergeProgress = new Progress();
     // Boolean variable for including/considering final merge as part of sort
     // phase or not. This is true in map task, false in reduce task. It is
     // used in calculating mergeProgress.
@@ -924,9 +922,10 @@ public class TezMerger {
   }
 
   private static class EmptyIterator implements TezRawKeyValueIterator {
-    final Progress progress = new Progress();
+    final Progress progress;
 
     EmptyIterator() {
+      progress = new Progress();
       progress.set(1.0f);
     }
 

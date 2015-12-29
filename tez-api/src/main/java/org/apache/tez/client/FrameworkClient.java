@@ -31,8 +31,6 @@ import org.apache.hadoop.yarn.exceptions.YarnException;
 import org.apache.tez.common.ReflectionUtils;
 import org.apache.tez.dag.api.TezConfiguration;
 import org.apache.tez.dag.api.TezException;
-import org.apache.tez.dag.api.TezReflectionException;
-import org.apache.tez.dag.api.TezUncheckedException;
 
 @Private
 public abstract class FrameworkClient {
@@ -41,11 +39,7 @@ public abstract class FrameworkClient {
 
     boolean isLocal = tezConf.getBoolean(TezConfiguration.TEZ_LOCAL_MODE, TezConfiguration.TEZ_LOCAL_MODE_DEFAULT);
     if (isLocal) {
-      try {
-        return ReflectionUtils.createClazzInstance("org.apache.tez.client.LocalClient");
-      } catch (TezReflectionException e) {
-        throw new TezUncheckedException("Fail to create LocalClient", e);
-      }
+      return ReflectionUtils.createClazzInstance("org.apache.tez.client.LocalClient");
     }
     return new TezYarnClient(YarnClient.createYarnClient());
   }

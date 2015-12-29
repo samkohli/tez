@@ -19,7 +19,6 @@
 package org.apache.tez.dag.api;
 
 import org.apache.hadoop.yarn.api.records.Resource;
-import org.apache.tez.client.CallerContext;
 import org.apache.tez.dag.api.EdgeProperty.DataMovementType;
 import org.apache.tez.dag.api.EdgeProperty.DataSourceType;
 import org.apache.tez.dag.api.EdgeProperty.SchedulingType;
@@ -87,7 +86,7 @@ public class TestDAG {
         dummyTaskCount, dummyTaskResource);
 
     DAG dag = DAG.create("testDAG");
-    dag.createVertexGroup("group_1", v1, v2);
+    dag.createVertexGroup("group_1", v1,v2);
 
     try {
       dag.createVertexGroup("group_1", v2, v3);
@@ -308,29 +307,4 @@ public class TestDAG {
       Assert.assertEquals("Duplicated output:output_1, vertexName=v1", e.getMessage());
     }
   }
-
-  @Test
-  public void testCallerContext() {
-    try {
-      CallerContext.create("ctxt", "", "", "desc");
-      Assert.fail("Expected failure for invalid args");
-    } catch (Exception e) {
-      // Expected
-    }
-    try {
-      CallerContext.create("", "desc");
-      Assert.fail("Expected failure for invalid args");
-    } catch (Exception e) {
-      // Expected
-    }
-
-    CallerContext.create("ctxt", "a", "a", "desc");
-    CallerContext.create("ctxt", null);
-
-    CallerContext callerContext = CallerContext.create("ctxt", "desc");
-    Assert.assertTrue(callerContext.toString().contains("desc"));
-    Assert.assertFalse(callerContext.contextAsSimpleString().contains("desc"));
-
-  }
-
 }

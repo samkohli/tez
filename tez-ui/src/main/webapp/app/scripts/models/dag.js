@@ -18,13 +18,11 @@
 App.Dag = App.AbstractEntity.extend({
 
   idx: function() {
-    return App.Helpers.misc.getDagIndexFromDagId(this.get('id'));
+    return this.get('id').split('_').splice(-1).pop();
   }.property('id'),
 
-  progress: DS.attr('number'),
-
   submittedTime: DS.attr('number'),
-
+  
   // start time of the entity
   startTime: DS.attr('number'),
 
@@ -50,9 +48,7 @@ App.Dag = App.AbstractEntity.extend({
   }.property('id'),
 
   tezApp: DS.belongsTo('tezApp'),
-  appDetail: DS.attr('object'),
-
-  progress: DS.attr('number'),
+  appDetail: DS.belongsTo('appDetail'),
 
   // status
   status: DS.attr('string'),
@@ -66,7 +62,7 @@ App.Dag = App.AbstractEntity.extend({
   // diagnostics info if any.
   diagnostics: DS.attr('string'),
 
-  // Dag plan related data
+  // Dag plan reated data
   planName: DS.attr('string'),
   planVersion: DS.attr('number'),
   appContextInfo: DS.attr('object'),
@@ -76,10 +72,6 @@ App.Dag = App.AbstractEntity.extend({
   vertexIdToNameMap: DS.attr('array'),
 
   counterGroups: DS.attr('array'),
-  amWebServiceVersion: DS.attr('string'),
-  containerLogs: DS.attr('array'),
-
-  callerId: DS.attr('string')
 });
 
 App.CounterGroup = DS.Model.extend({
@@ -144,8 +136,6 @@ App.Vertex = App.AbstractEntity.extend({
     var f = this.get('failedTasks');
     return !!f && f > 0;
   }.property('failedTasks'),
-
-  progress: DS.attr('number'),
 
   /**
    * Vertex type has to be one of the types defined in 'App.VertexType'
@@ -221,13 +211,8 @@ App.Vertex = App.AbstractEntity.extend({
 
   failedTasks: DS.attr('number'),
   sucessfulTasks: DS.attr('number'),
-  runningTasks: DS.attr('number'),
-  pendingTasks: DS.attr('number'),
   numTasks: DS.attr('number'),
   killedTasks: DS.attr('number'),
-
-  failedTaskAttempts: DS.attr('number'),
-  killedTaskAttempts: DS.attr('number'),
 
   diagnostics: DS.attr('string'),
 
@@ -323,8 +308,8 @@ App.AppDetail = App.AbstractEntity.extend({
   queue: DS.attr('string'),
   type: DS.attr('string'),
 
-  status: DS.attr('string'),
-  finalStatus: DS.attr('string'),
+  appState: DS.attr('string'),
+  finalAppStatus: DS.attr('string'),
   progress: DS.attr('string'),
 
   startedTime: DS.attr('number'),
@@ -343,40 +328,15 @@ App.TezApp = App.AbstractEntity.extend({
 
   startedTime: DS.attr('number'),
 
-  appDetail: DS.attr('object'),
+  appDetail: DS.belongsTo('appDetail', { async: true }),
   dags: DS.hasMany('dag', { async: true }),
 
-  configs: DS.hasMany('kVData', { async: false }),
-
-  tezBuildTime: DS.attr('string'),
-  tezRevision: DS.attr('string'),
-  tezVersion: DS.attr('string'),
+  configs: DS.hasMany('kVData', { async: false })
 });
 
-App.ClusterApp = App.AbstractEntity.extend({
-  status: DS.attr('string'),
-  finalStatus: DS.attr('string'),
-
-  user: DS.attr('string'),
-  name: DS.attr('string'),
-  queue: DS.attr('string'),
-  type: DS.attr('string'),
-
-  startedTime: DS.attr('number'),
-  elapsedTime: DS.attr('number'),
-  finishedTime: DS.attr('number'),
-  submittedTime: DS.attr('number'),
-
-  progress: DS.attr('number'),
-
-  isComplete: function () {
-    var status = this.get('status');
-    return status == 'FINISHED' || status == 'FAILED' || status == 'KILLED';
-  }.property('status')
-});
 
 App.Task = App.AbstractEntity.extend({
-  status: DS.attr('string'),
+  status: DS.attr('status'),
 
   index: function () {
     var id = this.get('id'),
@@ -385,8 +345,6 @@ App.Task = App.AbstractEntity.extend({
   }.property('id'),
 
   dagID: DS.attr('string'),
-
-  progress: DS.attr('number'),
 
   successfulAttemptId: DS.attr('string'),
 
@@ -431,56 +389,6 @@ App.VertexProgress = DS.Model.extend({
   progress: DS.attr('number'),
   appId: DS.attr('string'),
   dagIdx: DS.attr('string')
-});
-
-App.DagInfo = DS.Model.extend({
-  // we need appId and dagIdx as they are used for querying with AM
-  appId: function() {
-    return App.Helpers.misc.getAppIdFromDagId(this.get('id'));
-  }.property('id'),
-  dagIdx: function() {
-    return App.Helpers.misc.getDagIndexFromDagId(this.get('id'));
-  }.property('id'),
-
-  progress: DS.attr('number'),
-  status: DS.attr('string'),
-  counters: DS.attr('object')
-});
-
-App.VertexInfo = DS.Model.extend({
-  // we need appId and dagIdx as they are used for querying with AM
-  appId: function() {
-    return App.Helpers.misc.getAppIdFromDagId(this.get('id'));
-  }.property('id'),
-  dagIdx: function() {
-    return App.Helpers.misc.getDagIndexFromDagId(this.get('id'));
-  }.property('id'),
-
-  progress: DS.attr('number'),
-  status: DS.attr('string'),
-  numTasks: DS.attr('number'),
-  runningTasks: DS.attr('number'),
-  sucessfulTasks: DS.attr('number'),
-  failedTaskAttempts: DS.attr('number'),
-  killedTaskAttempts: DS.attr('number'),
-
-  pendingTasks: function() {
-    return this.get('numTasks') - this.get('runningTasks') - this.get('sucessfulTasks');
-  }.property('numTasks', 'runningTasks', 'sucessfulTasks'),
-
-  counters: DS.attr('object')
-});
-
-App.TaskInfo = DS.Model.extend({
-  progress: DS.attr('number'),
-  status: DS.attr('string'),
-  counters: DS.attr('object')
-});
-
-App.AttemptInfo = DS.Model.extend({
-  progress: DS.attr('number'),
-  status: DS.attr('string'),
-  counters: DS.attr('object')
 });
 
 App.KVDatum = DS.Model.extend({

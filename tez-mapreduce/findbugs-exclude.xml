@@ -70,13 +70,6 @@
   </Match>
 
   <Match>
-    <Class name="org.apache.tez.mapreduce.grouper.GroupedSplitContainer"/>
-    <Method name="getLocations"/>
-    <Field name="locations"/>
-    <Bug pattern="EI_EXPOSE_REP"/>
-  </Match>
-
-  <Match>
     <Class name="org.apache.tez.mapreduce.hadoop.InputSplitInfoMem"/>
     <Method name="getNewFormatSplits"/>
     <Field name="newFormatSplits"/>
@@ -99,13 +92,6 @@
 
   <Match>
     <Class name="org.apache.hadoop.mapreduce.split.TezGroupedSplit"/>
-    <Method name="&lt;init&gt;"/>
-    <Field name="locations"/>
-    <Bug pattern="EI_EXPOSE_REP2"/>
-  </Match>
-
-  <Match>
-    <Class name="org.apache.tez.mapreduce.grouper.GroupedSplitContainer"/>
     <Method name="&lt;init&gt;"/>
     <Field name="locations"/>
     <Bug pattern="EI_EXPOSE_REP2"/>
@@ -162,6 +148,13 @@
     <Class name="org.apache.tez.mapreduce.input.MRInputLegacy"/>
     <Method name="checkAndAwaitRecordReaderInitialization"/>
     <Bug pattern="WA_AWAIT_NOT_IN_LOOP"/>
+  </Match>
+
+  <!-- TEZ-1976 -->
+  <Match>
+    <Class name="org.apache.hadoop.mapreduce.split.TezGroupedSplitsInputFormat$SplitHolder"/>
+    <Field name="split"/>
+    <Bug pattern="URF_UNREAD_FIELD"/>
   </Match>
 
 </FindBugsFilter>

@@ -198,23 +198,6 @@ public class TestInput extends AbstractLogicalInput {
               LOG.info(msg);
               throwException(msg);
             } else {
-              try {
-                // keep sending input read error until we receive the new input
-                // this check breaks the loop when we see a new input version
-                // thus, when multiple input versions arrive, this methods gets triggered
-                // for each version via wait-notify. But all events may have been processed in 
-                // handleEvents() before the code reaches this point. Having this loop, makes 
-                // it quickly exit for an older version if a newer version has been seen. 
-                // however, if a newer version is not seen then it keeps sending input error 
-                // indefinitely, by design.
-                while (lastInputReadyValue == inputReady.get()) {
-                  // keep sending events
-                  Thread.sleep(500);
-                  getContext().sendEvents(events);
-                }
-              } catch (InterruptedException e) {
-                LOG.info("Interrupted while sending events", e);
-              }
               done = false;
             }
           } else if ((failingTaskIndices.contains(failAll) ||
@@ -360,9 +343,7 @@ public class TestInput extends AbstractLogicalInput {
             dmEvent.getUserPayload().getInt();
       } else if (event instanceof InputFailedEvent) {
         InputFailedEvent ifEvent = (InputFailedEvent) event;
-        if (this.completedInputVersion[ifEvent.getTargetIndex()] == ifEvent.getVersion()) {
-          numCompletedInputs--;
-        }
+        numCompletedInputs--;
         LOG.info("Received InputFailed event targetId: " + ifEvent.getTargetIndex() +
             " version: " + ifEvent.getVersion() +
             " numInputs: " + getNumPhysicalInputs() +

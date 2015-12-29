@@ -22,6 +22,7 @@ import static org.junit.Assert.fail;
 import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.anyBoolean;
 import static org.mockito.Matchers.anyInt;
+import static org.mockito.Matchers.anyList;
 import static org.mockito.Matchers.anyLong;
 import static org.mockito.Matchers.anyString;
 import static org.mockito.Matchers.eq;
@@ -41,15 +42,9 @@ import java.io.IOException;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.Arrays;
-import java.util.Collection;
-import java.util.Iterator;
-import java.util.LinkedHashMap;
-import java.util.LinkedList;
 import java.util.List;
-import java.util.Map.Entry;
 
 import com.google.common.collect.Lists;
-
 import org.apache.tez.http.HttpConnection;
 import org.apache.tez.http.HttpConnectionParams;
 import org.apache.tez.common.counters.TezCounter;
@@ -278,7 +273,7 @@ public class TestFetcher {
     }).when(spyFetcher).getIndexRecord(anyString(), eq(host.getPartitionId()));
 
     doNothing().when(scheduler).copySucceeded(any(InputAttemptIdentifier.class), any(MapHost.class),
-        anyLong(), anyLong(), anyLong(), any(MapOutput.class), anyBoolean());
+        anyLong(), anyLong(), anyLong(), any(MapOutput.class));
     doNothing().when(scheduler).putBackKnownMapOutput(host,
         srcAttempts.get(FIRST_FAILED_ATTEMPT_IDX));
     doNothing().when(scheduler).putBackKnownMapOutput(host,
@@ -290,8 +285,8 @@ public class TestFetcher {
     for (int i : sucessfulAttemptsIndexes) {
       verifyCopySucceeded(scheduler, host, srcAttempts, i);
     }
-    verify(scheduler).copyFailed(srcAttempts.get(FIRST_FAILED_ATTEMPT_IDX), host, true, false, true);
-    verify(scheduler).copyFailed(srcAttempts.get(SECOND_FAILED_ATTEMPT_IDX), host, true, false, true);
+    verify(scheduler).copyFailed(srcAttempts.get(FIRST_FAILED_ATTEMPT_IDX), host, true, false);
+    verify(scheduler).copyFailed(srcAttempts.get(SECOND_FAILED_ATTEMPT_IDX), host, true, false);
 
     verify(metrics, times(3)).successFetch();
     verify(metrics, times(2)).failedFetch();
@@ -309,7 +304,7 @@ public class TestFetcher {
     String filenameToMatch = SHUFFLE_INPUT_FILE_PREFIX + srcAttemptToMatch.getPathComponent();
     ArgumentCaptor<MapOutput> captureMapOutput = ArgumentCaptor.forClass(MapOutput.class);
     verify(scheduler).copySucceeded(eq(srcAttemptToMatch), eq(host), eq(p * 100),
-        eq(p * 1000), anyLong(), captureMapOutput.capture(), anyBoolean());
+        eq(p * 1000), anyLong(), captureMapOutput.capture());
 
     // cannot use the equals of MapOutput as it compares id which is private. so doing it manually
     MapOutput m = captureMapOutput.getAllValues().get(0);
@@ -378,7 +373,7 @@ public class TestFetcher {
         new InputAttemptIdentifier(3, 4, InputAttemptIdentifier.PATH_PREFIX + "pathComponent_3")
     );
     doReturn(srcAttempts).when(scheduler).getMapsForHost(host);
-    doReturn(true).when(fetcher).setupConnection(any(MapHost.class), any(Collection.class));
+    doReturn(true).when(fetcher).setupConnection(host, srcAttempts);
 
     URL url = ShuffleUtils.constructInputURL(host.getBaseUrl(), srcAttempts, false);
     fetcher.httpConnection = new FakeHttpConnection(url, null, "", null);
@@ -399,7 +394,8 @@ public class TestFetcher {
       @Override public Void answer(InvocationOnMock invocation) throws Throwable {
         // Emulate host down for 4 seconds.
         Thread.sleep(4000);
-        doReturn(false).when(fetcher).setupConnection(any(MapHost.class), any(Collection.class));
+        doReturn(false).when(fetcher).setupConnection(host, srcAttempts);
+
         // Throw IOException when fetcher tries to connect again to the same node
         throw new FetcherReadTimeoutException("creating fetcher socket read timeout exception");
       }
@@ -411,10 +407,10 @@ public class TestFetcher {
       //ignore
     }
     //setup connection should be called twice (1 for connect and another for retry)
-    verify(fetcher, times(2)).setupConnection(any(MapHost.class), any(Collection.class));
+    verify(fetcher, times(2)).setupConnection(any(MapHost.class), anyList());
     //since copyMapOutput consistently fails, it should call copyFailed once
     verify(scheduler, times(1)).copyFailed(any(InputAttemptIdentifier.class), any(MapHost.class),
-          anyBoolean(), anyBoolean(), anyBoolean());
+          anyBoolean(), anyBoolean());
 
     verify(fetcher, times(1)).putBackRemainingMapOutputs(any(MapHost.class));
     verify(scheduler, times(3)).putBackKnownMapOutput(any(MapHost.class),
@@ -462,7 +458,8 @@ public class TestFetcher {
             wrongLengthErrsCounter, badIdErrsCounter,
             wrongMapErrsCounter, connectionErrsCounter, wrongReduceErrsCounter, true);
     final FetcherOrderedGrouped fetcher = spy(mockFetcher);
-    fetcher.remaining = new LinkedHashMap<String, InputAttemptIdentifier>();
+    fetcher.remaining = Lists.newLinkedList();
+
     final List<InputAttemptIdentifier> srcAttempts = Arrays.asList(
         new InputAttemptIdentifier(0, 1, InputAttemptIdentifier.PATH_PREFIX + "pathComponent_0"),
         new InputAttemptIdentifier(1, 2, InputAttemptIdentifier.PATH_PREFIX + "pathComponent_1"),
@@ -478,63 +475,6 @@ public class TestFetcher {
       Assert.assertTrue(ioErrsCounter.getValue() > currentIOErrors);
     } catch (IOException e) {
       fail();
-    }
-  }
-
-  @Test(timeout = 5000)
-  public void testInputAttemptIdentifierMap() {
-    InputAttemptIdentifier[] srcAttempts = {
-      new InputAttemptIdentifier(new InputIdentifier(0), 1, InputAttemptIdentifier.PATH_PREFIX + "pathComponent_0",
-          false, InputAttemptIdentifier.SPILL_INFO.INCREMENTAL_UPDATE, 0),
-          //duplicate entry
-      new InputAttemptIdentifier(new InputIdentifier(0), 1, InputAttemptIdentifier.PATH_PREFIX + "pathComponent_0",
-          false, InputAttemptIdentifier.SPILL_INFO.INCREMENTAL_UPDATE, 0),
-      // pipeline shuffle based identifiers, with multiple attempts
-      new InputAttemptIdentifier(new InputIdentifier(1), 1, InputAttemptIdentifier.PATH_PREFIX + "pathComponent_1",
-          false, InputAttemptIdentifier.SPILL_INFO.INCREMENTAL_UPDATE, 0),
-      new InputAttemptIdentifier(new InputIdentifier(1), 2, InputAttemptIdentifier.PATH_PREFIX + "pathComponent_1",
-          false, InputAttemptIdentifier.SPILL_INFO.INCREMENTAL_UPDATE, 0),
-      new InputAttemptIdentifier(new InputIdentifier(1), 1, InputAttemptIdentifier.PATH_PREFIX + "pathComponent_2",
-          false, InputAttemptIdentifier.SPILL_INFO.INCREMENTAL_UPDATE, 1),
-      new InputAttemptIdentifier(new InputIdentifier(1), 1, InputAttemptIdentifier.PATH_PREFIX + "pathComponent_3",
-          false, InputAttemptIdentifier.SPILL_INFO.FINAL_UPDATE, 2),
-      new InputAttemptIdentifier(new InputIdentifier(2), 1, InputAttemptIdentifier.PATH_PREFIX + "pathComponent_3",
-          false, InputAttemptIdentifier.SPILL_INFO.FINAL_MERGE_ENABLED, 0)
-    };
-    InputAttemptIdentifier[] expectedSrcAttempts = {
-      new InputAttemptIdentifier(new InputIdentifier(0), 1, InputAttemptIdentifier.PATH_PREFIX + "pathComponent_0",
-          false, InputAttemptIdentifier.SPILL_INFO.INCREMENTAL_UPDATE, 0),
-      // pipeline shuffle based identifiers
-      new InputAttemptIdentifier(new InputIdentifier(1), 1, InputAttemptIdentifier.PATH_PREFIX + "pathComponent_1",
-          false, InputAttemptIdentifier.SPILL_INFO.INCREMENTAL_UPDATE, 0),
-      new InputAttemptIdentifier(new InputIdentifier(1), 2, InputAttemptIdentifier.PATH_PREFIX + "pathComponent_1",
-          false, InputAttemptIdentifier.SPILL_INFO.INCREMENTAL_UPDATE, 0),
-      new InputAttemptIdentifier(new InputIdentifier(1), 1, InputAttemptIdentifier.PATH_PREFIX + "pathComponent_2",
-          false, InputAttemptIdentifier.SPILL_INFO.INCREMENTAL_UPDATE, 1),
-      new InputAttemptIdentifier(new InputIdentifier(1), 1, InputAttemptIdentifier.PATH_PREFIX + "pathComponent_3",
-          false, InputAttemptIdentifier.SPILL_INFO.FINAL_UPDATE, 2),
-      new InputAttemptIdentifier(new InputIdentifier(2), 1, InputAttemptIdentifier.PATH_PREFIX + "pathComponent_3",
-          false, InputAttemptIdentifier.SPILL_INFO.FINAL_MERGE_ENABLED, 0)
-    };
-
-    Configuration conf = new TezConfiguration();
-    ShuffleScheduler scheduler = mock(ShuffleScheduler.class);
-    MergeManager merger = mock(MergeManager.class);
-    ShuffleClientMetrics metrics = mock(ShuffleClientMetrics.class);
-    Shuffle shuffle = mock(Shuffle.class);
-    MapHost mapHost = new MapHost(0, HOST + ":" + PORT, "baseurl");
-    FetcherOrderedGrouped fetcher =
-        new FetcherOrderedGrouped(null, scheduler, merger, metrics, shuffle, null, false, 0,
-            null, conf, false, HOST, PORT, "src vertex", mapHost, ioErrsCounter,
-            wrongLengthErrsCounter, badIdErrsCounter,
-            wrongMapErrsCounter, connectionErrsCounter, wrongReduceErrsCounter, false);
-    fetcher.populateRemainingMap(new LinkedList<InputAttemptIdentifier>(Arrays.asList(srcAttempts)));
-    Assert.assertEquals(expectedSrcAttempts.length, fetcher.remaining.size());
-    Iterator<Entry<String, InputAttemptIdentifier>> iterator = fetcher.remaining.entrySet().iterator();
-    int count = 0;
-    while(iterator.hasNext()) {
-      String key = iterator.next().getKey();
-      Assert.assertTrue(expectedSrcAttempts[count++].toString().compareTo(key) == 0);
     }
   }
 }

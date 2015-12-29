@@ -24,12 +24,11 @@ import org.apache.hadoop.yarn.api.records.ApplicationAccessType;
 import org.apache.hadoop.yarn.api.records.ContainerId;
 import org.apache.tez.dag.records.TezTaskAttemptID;
 
-public class TaskAttemptEventStartedRemotely extends TaskAttemptEvent implements RecoveryEvent {
+public class TaskAttemptEventStartedRemotely extends TaskAttemptEvent {
 
   private final ContainerId containerId;
   // TODO Can appAcls be handled elsewhere ?
   private final Map<ApplicationAccessType, String> applicationACLs;
-  private boolean fromRecovery = false;
 
   public TaskAttemptEventStartedRemotely(TezTaskAttemptID id, ContainerId containerId,
       Map<ApplicationAccessType, String> appAcls) {
@@ -38,23 +37,12 @@ public class TaskAttemptEventStartedRemotely extends TaskAttemptEvent implements
     this.applicationACLs = appAcls;
   }
 
-  public TaskAttemptEventStartedRemotely(TezTaskAttemptID id, ContainerId containerId,
-      Map<ApplicationAccessType, String> appAcls, boolean fromRecovery) {
-    this(id, containerId, appAcls);
-    this.fromRecovery = fromRecovery;
-  }
-
   public ContainerId getContainerId() {
     return containerId;
   }
 
   public Map<ApplicationAccessType, String> getApplicationACLs() {
     return applicationACLs;
-  }
-
-  @Override
-  public boolean isFromRecovery() {
-    return fromRecovery;
   }
 
 }

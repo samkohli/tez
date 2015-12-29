@@ -16,46 +16,12 @@
  * limitations under the License.
  */
 
-App.TaskController = App.PollingController.extend(App.Helpers.DisplayHelper, App.ModelRefreshMixin, {
+App.TaskController = Em.ObjectController.extend(App.Helpers.DisplayHelper, App.ModelRefreshMixin, {
   controllerName: 'TaskController',
 
   pageTitle: 'Task',
 
   loading: true,
-  persistConfigs: false,
-
-  pollingType: 'taskInfo',
-
-  pollsterControl: function () {
-    if(this.get('vertex.dag.status') == 'RUNNING' &&
-        this.get('vertex.dag.amWebServiceVersion') != '1' &&
-        this.get('pollingEnabled') &&
-        this.get('isActive')) {
-      this.get('pollster').start();
-    }
-    else {
-      this.get('pollster').stop();
-    }
-  }.observes('vertex.dag.status', 'vertex.dag.amWebServiceVersion', 'isActive', 'pollingEnabled'),
-
-  pollsterOptionsObserver: function () {
-    var model = this.get('model');
-
-    this.get('pollster').setProperties( (model && model.get('status') != 'SUCCEEDED') ? {
-      targetRecords: [model],
-      options: {
-        appID: this.get('vertex.dag.applicationId'),
-        dagID: App.Helpers.misc.getIndexFromId(this.get('dagID')),
-        taskID: '%@_%@'.fmt(
-          App.Helpers.misc.getIndexFromId(this.get('vertexID')),
-          App.Helpers.misc.getIndexFromId(this.get('id'))
-        )
-      }
-    } : {
-      targetRecords: [],
-      options: null
-    });
-  }.observes('vertex.dag.applicationId', 'status', 'dagID', 'vertexID', 'id'),
 
   loadAdditional: function(task) {
     var that = this;
@@ -65,7 +31,6 @@ App.TaskController = App.PollingController.extend(App.Helpers.DisplayHelper, App
     var vertexLoader = this.store.find('vertex', task.get('vertexID'));
     var tezAppLoader = this.store.find('tezApp', 'tez_' + applicationId);
 
-    task.set('progress', undefined);
     var allLoaders = Em.RSVP.hash({
       dag: dagLoader,
       vertex: vertexLoader,

@@ -54,12 +54,10 @@ public class AMNodeImpl implements AMNode {
   private final ReadLock readLock;
   private final WriteLock writeLock;
   private final NodeId nodeId;
-  private final int schedulerId;
   private final AppContext appContext;
   private final int maxTaskFailuresPerNode;
   private boolean blacklistingEnabled;
   private boolean ignoreBlacklisting = false;
-  private boolean nodeUpdatesRescheduleEnabled;
   private Set<TezTaskAttemptID> failedAttemptIds = Sets.newHashSet();
 
   @SuppressWarnings("rawtypes")
@@ -174,18 +172,16 @@ public class AMNodeImpl implements AMNode {
 
 
   @SuppressWarnings("rawtypes")
-  public AMNodeImpl(NodeId nodeId, int schedulerId, int maxTaskFailuresPerNode,
+  public AMNodeImpl(NodeId nodeId, int maxTaskFailuresPerNode,
       EventHandler eventHandler, boolean blacklistingEnabled,
-      boolean rescheduleOnUnhealthyNode, AppContext appContext) {
+      AppContext appContext) {
     ReentrantReadWriteLock rwLock = new ReentrantReadWriteLock();
     this.readLock = rwLock.readLock();
     this.writeLock = rwLock.writeLock();
     this.nodeId = nodeId;
-    this.schedulerId = schedulerId;
     this.appContext = appContext;
     this.eventHandler = eventHandler;
     this.blacklistingEnabled = blacklistingEnabled;
-    this.nodeUpdatesRescheduleEnabled = rescheduleOnUnhealthyNode;
     this.maxTaskFailuresPerNode = maxTaskFailuresPerNode;
     this.stateMachine = stateMachineFactory.make(this);
     // TODO Handle the case where a node is created due to the RM reporting it's
@@ -251,7 +247,7 @@ public class AMNodeImpl implements AMNode {
 
   /* Blacklist the node with the AMNodeTracker and check if the node should be blacklisted */
   protected boolean registerBadNodeAndShouldBlacklist() {
-    return appContext.getNodeTracker().registerBadNodeAndShouldBlacklist(this, schedulerId);
+    return appContext.getNodeTracker().registerBadNodeAndShouldBlacklist(this);
   }
 
   protected void blacklistSelf() {
@@ -261,7 +257,7 @@ public class AMNodeImpl implements AMNode {
     // these containers are not useful anymore
     pastContainers.addAll(containers);
     containers.clear();
-    sendEvent(new AMSchedulerEventNodeBlacklistUpdate(getNodeId(), true, schedulerId));
+    sendEvent(new AMSchedulerEventNodeBlacklistUpdate(getNodeId(), true));
   }
 
   @SuppressWarnings("unchecked")
@@ -325,14 +321,12 @@ public class AMNodeImpl implements AMNode {
       SingleArcTransition<AMNodeImpl, AMNodeEvent> {
     @Override
     public void transition(AMNodeImpl node, AMNodeEvent nEvent) {
-      if (node.nodeUpdatesRescheduleEnabled) {
-        for (ContainerId c : node.containers) {
-          node.sendEvent(new AMContainerEventNodeFailed(c, "Node failed"));
-        }
-        // Resetting counters.
-        node.numFailedTAs = 0;
-        node.numSuccessfulTAs = 0;
+      for (ContainerId c : node.containers) {
+        node.sendEvent(new AMContainerEventNodeFailed(c, "Node failed"));
       }
+      // Resetting counters.
+      node.numFailedTAs = 0;
+      node.numSuccessfulTAs = 0;
     }
   }
 
@@ -369,7 +363,7 @@ public class AMNodeImpl implements AMNode {
     public void transition(AMNodeImpl node, AMNodeEvent nEvent) {
       node.ignoreBlacklisting = ignore;
       if (node.getState() == AMNodeState.BLACKLISTED) {
-        node.sendEvent(new AMSchedulerEventNodeBlacklistUpdate(node.getNodeId(), false, node.schedulerId));
+        node.sendEvent(new AMSchedulerEventNodeBlacklistUpdate(node.getNodeId(), false));
       }
     }
   }

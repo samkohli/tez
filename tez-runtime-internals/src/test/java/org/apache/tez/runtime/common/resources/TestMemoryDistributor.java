@@ -28,7 +28,6 @@ import org.apache.tez.dag.api.InputDescriptor;
 import org.apache.tez.dag.api.OutputDescriptor;
 import org.apache.tez.dag.api.ProcessorDescriptor;
 import org.apache.tez.dag.api.TezConfiguration;
-import org.apache.tez.dag.api.TezException;
 import org.apache.tez.runtime.api.MemoryUpdateCallback;
 import org.apache.tez.runtime.api.InputContext;
 import org.apache.tez.runtime.api.OutputContext;
@@ -48,7 +47,7 @@ public class TestMemoryDistributor {
   }
   
   @Test(timeout = 5000)
-  public void testScalingNoProcessor() throws TezException {
+  public void testScalingNoProcessor() {
     MemoryDistributor dist = new MemoryDistributor(2, 1, conf);
     
     dist.setJvmMemory(10000l);
@@ -82,7 +81,7 @@ public class TestMemoryDistributor {
   }
   
   @Test(timeout = 5000)
-  public void testScalingNoProcessor2() throws TezException {
+  public void testScalingNoProcessor2() {
     // Real world values
     MemoryDistributor dist = new MemoryDistributor(2, 0, conf);
     
@@ -107,7 +106,7 @@ public class TestMemoryDistributor {
   }
   
   @Test(timeout = 5000)
-  public void testScalingProcessor() throws TezException {
+  public void testScalingProcessor() {
     MemoryDistributor dist = new MemoryDistributor(2, 1, conf);
     
     dist.setJvmMemory(10000l);
@@ -149,7 +148,7 @@ public class TestMemoryDistributor {
   }
   
   @Test(timeout = 5000)
-  public void testScalingDisabled() throws TezException {
+  public void testScalingDisabled() {
     // Real world values
     Configuration conf = new Configuration(this.conf);
     conf.setBoolean(TezConfiguration.TEZ_TASK_SCALE_MEMORY_ENABLED, false);
@@ -176,7 +175,7 @@ public class TestMemoryDistributor {
   }
   
   @Test(timeout = 5000)
-  public void testReserveFractionConfigured() throws TezException {
+  public void testReserveFractionConfigured() {
     Configuration conf = new Configuration(this.conf);
     conf.setDouble(TezConfiguration.TEZ_TASK_SCALE_MEMORY_RESERVE_FRACTION, 0.5d);
     MemoryDistributor dist = new MemoryDistributor(2, 1, conf);

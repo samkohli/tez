@@ -25,8 +25,6 @@ import java.util.Map;
 import java.util.Random;
 
 import com.google.common.base.Stopwatch;
-
-import org.apache.commons.io.IOUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.hadoop.conf.Configuration;
@@ -50,6 +48,7 @@ import org.apache.tez.dag.api.Vertex;
 import org.apache.tez.examples.TezExampleBase;
 import org.apache.tez.runtime.api.ProcessorContext;
 import org.apache.tez.runtime.library.processor.SimpleProcessor;
+import sun.misc.IOUtils;
 
 public class RPCLoadGen extends TezExampleBase {
 
@@ -152,7 +151,9 @@ public class RPCLoadGen extends TezExampleBase {
       random.nextBytes(diskPayload);
       fs = FileSystem.get(conf);
       resourcePath = new Path(Path.SEPARATOR + "tmp", DISK_PAYLOAD_NAME);
+      System.err.println("ZZZ: HDFSPath: " + resourcePath);
       resourcePath = fs.makeQualified(resourcePath);
+      System.err.println("ZZZ: HDFSPathResolved: " + resourcePath);
       FSDataOutputStream dataOut = fs.create(resourcePath, true);
       dataOut.write(diskPayload);
       dataOut.close();
@@ -195,12 +196,12 @@ public class RPCLoadGen extends TezExampleBase {
         LOG.info("Reading from local filesystem");
         FileSystem localFs = FileSystem.getLocal(new Configuration());
         FSDataInputStream is = localFs.open(new Path(DISK_PAYLOAD_NAME));
-        IOUtils.toByteArray(is);
+        IOUtils.readFully(is, -1, false);
       } else if (modeByte == VIA_HDFS_DIRECT_READ_BYTE) {
         LOG.info("Reading from HDFS");
         FileSystem fs = FileSystem.get(new Configuration());
         FSDataInputStream is = fs.open(new Path(Path.SEPARATOR + "tmp", DISK_PAYLOAD_NAME));
-        IOUtils.toByteArray(is);
+        IOUtils.readFully(is, -1, false);
       } else {
         throw new IllegalArgumentException("Unknown execution mode: [" + modeByte + "]");
       }

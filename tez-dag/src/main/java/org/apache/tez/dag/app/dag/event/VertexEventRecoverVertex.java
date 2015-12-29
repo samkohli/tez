@@ -32,4 +32,5 @@ public class VertexEventRecoverVertex extends VertexEvent {
   public VertexState getDesiredState() {
     return desiredState;
   }
+
 }

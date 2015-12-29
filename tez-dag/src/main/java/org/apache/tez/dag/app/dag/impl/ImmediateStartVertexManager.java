@@ -28,11 +28,10 @@ import org.apache.tez.dag.api.EdgeProperty;
 import org.apache.tez.dag.api.InputDescriptor;
 import org.apache.tez.dag.api.VertexManagerPlugin;
 import org.apache.tez.dag.api.VertexManagerPluginContext;
-import org.apache.tez.dag.api.VertexManagerPluginContext.ScheduleTaskRequest;
+import org.apache.tez.dag.api.VertexManagerPluginContext.TaskWithLocationHint;
 import org.apache.tez.dag.api.event.VertexState;
 import org.apache.tez.dag.api.event.VertexStateUpdate;
 import org.apache.tez.runtime.api.Event;
-import org.apache.tez.runtime.api.TaskAttemptIdentifier;
 import org.apache.tez.runtime.api.events.VertexManagerEvent;
 
 import java.util.EnumSet;
@@ -57,7 +56,7 @@ public class ImmediateStartVertexManager extends VertexManagerPlugin {
   }
 
   @Override
-  public void onVertexStarted(List<TaskAttemptIdentifier> completions) {
+  public void onVertexStarted(Map<String, List<Integer>> completions) {
     managedTasks = getContext().getVertexNumTasks(getContext().getVertexName());
     Map<String, EdgeProperty> edges = getContext().getInputVertexEdgeProperties();
     for (Map.Entry<String, EdgeProperty> entry : edges.entrySet()) {
@@ -91,14 +90,14 @@ public class ImmediateStartVertexManager extends VertexManagerPlugin {
     }
     
     tasksScheduled = true;
-    List<ScheduleTaskRequest> tasksToStart = Lists.newArrayListWithCapacity(managedTasks);
+    List<TaskWithLocationHint> tasksToStart = Lists.newArrayListWithCapacity(managedTasks);
     for (int i = 0; i < managedTasks; ++i) {
-      tasksToStart.add(ScheduleTaskRequest.create(i, null));
+      tasksToStart.add(new TaskWithLocationHint(i, null));
     }
 
     if (!tasksToStart.isEmpty()) {
       LOG.info("Starting " + tasksToStart.size() + " in " + getContext().getVertexName());
-      getContext().scheduleTasks(tasksToStart);
+      getContext().scheduleVertexTasks(tasksToStart);
     }
     // all tasks scheduled. Can call vertexManagerDone().
     // TODO TEZ-1714 for locking issues getContext().vertexManagerDone();
@@ -135,7 +134,7 @@ public class ImmediateStartVertexManager extends VertexManagerPlugin {
   }
 
   @Override
-  public void onSourceTaskCompleted(TaskAttemptIdentifier attempt) {
+  public void onSourceTaskCompleted(String srcVertexName, Integer attemptId) {
   }
 
   @Override

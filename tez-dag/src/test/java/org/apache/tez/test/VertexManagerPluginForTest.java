@@ -25,6 +25,7 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.List;
+import java.util.Map;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.tez.dag.api.InputDescriptor;
@@ -33,7 +34,6 @@ import org.apache.tez.dag.api.UserPayload;
 import org.apache.tez.dag.api.VertexManagerPlugin;
 import org.apache.tez.dag.api.VertexManagerPluginContext;
 import org.apache.tez.runtime.api.Event;
-import org.apache.tez.runtime.api.TaskAttemptIdentifier;
 import org.apache.tez.runtime.api.events.VertexManagerEvent;
 
 public class VertexManagerPluginForTest extends VertexManagerPlugin {
@@ -99,14 +99,14 @@ public class VertexManagerPluginForTest extends VertexManagerPlugin {
   }
 
   @Override
-  public void onVertexStarted(List<TaskAttemptIdentifier> completions) {
+  public void onVertexStarted(Map<String, List<Integer>> completions) {
     if (pluginConfig.getReconfigureOnStart()) {
       getContext().reconfigureVertex(pluginConfig.getNumTasks(), null, null);
     }
   }
 
   @Override
-  public void onSourceTaskCompleted(TaskAttemptIdentifier attempt) {}
+  public void onSourceTaskCompleted(String srcVertexName, Integer taskId) {}
 
   @Override
   public void onVertexManagerEventReceived(VertexManagerEvent vmEvent) {}

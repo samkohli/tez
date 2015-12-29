@@ -28,7 +28,6 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.hadoop.classification.InterfaceAudience.Private;
-import org.apache.tez.dag.api.TezReflectionException;
 import org.apache.tez.dag.api.TezUncheckedException;
 
 @Private
@@ -37,44 +36,55 @@ public class ReflectionUtils {
   private static final Map<String, Class<?>> CLAZZ_CACHE = new ConcurrentHashMap<String, Class<?>>();
 
   @Private
-  public static Class<?> getClazz(String className) throws TezReflectionException {
+  public static Class<?> getClazz(String className) {
     Class<?> clazz = CLAZZ_CACHE.get(className);
     if (clazz == null) {
       try {
         clazz = Class.forName(className, true, Thread.currentThread().getContextClassLoader());
       } catch (ClassNotFoundException e) {
-        throw new TezReflectionException("Unable to load class: " + className, e);
+        throw new TezUncheckedException("Unable to load class: " + className, e);
       }
     }
     return clazz;
   }
 
-  private static <T> T getNewInstance(Class<T> clazz) throws TezReflectionException {
+  private static <T> T getNewInstance(Class<T> clazz) {
     T instance;
     try {
       instance = clazz.newInstance();
-    } catch (Exception e) {
-      throw new TezReflectionException(
+    } catch (InstantiationException e) {
+      throw new TezUncheckedException(
+          "Unable to instantiate class with 0 arguments: " + clazz.getName(), e);
+    } catch (IllegalAccessException e) {
+      throw new TezUncheckedException(
           "Unable to instantiate class with 0 arguments: " + clazz.getName(), e);
     }
     return instance;
   }
 
-  private static <T> T getNewInstance(Class<T> clazz, Class<?>[] parameterTypes, Object[] parameters)
-    throws TezReflectionException {
+  private static <T> T getNewInstance(Class<T> clazz, Class<?>[] parameterTypes, Object[] parameters) {
     T instance;
     try {
       Constructor<T> constructor = clazz.getConstructor(parameterTypes);
       instance = constructor.newInstance(parameters);
-    } catch (Exception e) {
-      throw new TezReflectionException(
+    } catch (InstantiationException e) {
+      throw new TezUncheckedException(
+          "Unable to instantiate class with " + parameters.length + " arguments: " + clazz.getName(), e);
+    } catch (IllegalAccessException e) {
+      throw new TezUncheckedException(
+          "Unable to instantiate class with " + parameters.length + " arguments: " + clazz.getName(), e);
+    } catch (NoSuchMethodException e) {
+      throw new TezUncheckedException(
+          "Unable to instantiate class with " + parameters.length + " arguments: " + clazz.getName(), e);
+    } catch (InvocationTargetException e) {
+      throw new TezUncheckedException(
           "Unable to instantiate class with " + parameters.length + " arguments: " + clazz.getName(), e);
     }
     return instance;
   }
 
   @Private
-  public static <T> T createClazzInstance(String className) throws TezReflectionException {
+  public static <T> T createClazzInstance(String className) {
     Class<?> clazz = getClazz(className);
     @SuppressWarnings("unchecked")
     T instance = (T) getNewInstance(clazz);
@@ -82,8 +92,7 @@ public class ReflectionUtils {
   }
 
   @Private
-  public static <T> T createClazzInstance(String className, Class<?>[] parameterTypes, Object[] parameters)
-    throws TezReflectionException {
+  public static <T> T createClazzInstance(String className, Class<?>[] parameterTypes, Object[] parameters) {
     Class<?> clazz = getClazz(className);
     @SuppressWarnings("unchecked")
     T instance = (T) getNewInstance(clazz, parameterTypes, parameters);
@@ -92,20 +101,20 @@ public class ReflectionUtils {
 
   @Private
   @SuppressWarnings("unchecked")
-  public static <T> T invokeMethod(Object target, Method method, Object... args) throws TezReflectionException {
+  public static <T> T invokeMethod(Object target, Method method, Object... args) {
     try {
       return (T) method.invoke(target, args);
     } catch (Exception e) {
-      throw new TezReflectionException(e);
+      throw new TezUncheckedException(e);
     }
   }
 
   @Private
-  public static Method getMethod(Class<?> targetClazz, String methodName, Class<?>... parameterTypes) throws TezReflectionException {
+  public static Method getMethod(Class<?> targetClazz, String methodName, Class<?>... parameterTypes) {
     try {
       return targetClazz.getMethod(methodName, parameterTypes);
     } catch (NoSuchMethodException e) {
-      throw new TezReflectionException(e);
+      throw new TezUncheckedException(e);
     }
   }
 

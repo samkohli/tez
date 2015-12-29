@@ -26,8 +26,6 @@ App.DagViewController = App.TablePageController.extend({
 
   cacheDomain: Ember.computed.alias('controllers.dag.id'),
 
-  showAutoUpdate: false,
-
   columnSelectorTitle: 'Customize vertex tooltip',
 
   beforeLoad: function () {

@@ -26,7 +26,6 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.tez.dag.api.InputDescriptor;
 import org.apache.tez.dag.api.OutputDescriptor;
 import org.apache.tez.dag.api.TezConfiguration;
-import org.apache.tez.dag.api.TezException;
 import org.apache.tez.runtime.api.LogicalInput;
 import org.apache.tez.runtime.api.LogicalOutput;
 import org.apache.tez.runtime.api.MemoryUpdateCallback;
@@ -52,7 +51,7 @@ public class TestWeightedScalingMemoryDistributor extends TestMemoryDistributor 
   }
   
   @Test(timeout = 5000)
-  public void testSimpleWeightedScaling() throws TezException {
+  public void testSimpleWeightedScaling() {
     Configuration conf = new Configuration(this.conf);
     conf.setStrings(TezConfiguration.TEZ_TASK_SCALE_MEMORY_WEIGHTED_RATIOS,
         WeightedScalingMemoryDistributor.generateWeightStrings(0, 0, 1, 2, 3, 1, 1));
@@ -99,7 +98,7 @@ public class TestWeightedScalingMemoryDistributor extends TestMemoryDistributor 
   }
 
   @Test(timeout = 5000)
-  public void testAdditionalReserveFractionWeightedScaling() throws TezException {
+  public void testAdditionalReserveFractionWeightedScaling() {
     Configuration conf = new Configuration(this.conf);
     conf.setStrings(TezConfiguration.TEZ_TASK_SCALE_MEMORY_WEIGHTED_RATIOS,
         WeightedScalingMemoryDistributor.generateWeightStrings(0, 0, 2, 3, 6, 1, 1));

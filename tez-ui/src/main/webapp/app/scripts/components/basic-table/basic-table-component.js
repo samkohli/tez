@@ -36,14 +36,14 @@ App.BasicTableComponent = Em.Component.extend({
   rowCountOptions: [5, 10, 25, 50, 100],
   pageNavOnFooterAt: 25,
 
-  _sortedRows: null,
-
   init: function () {
-    this._super();
+    if(this.get('sortColumnId')) {
+      this._sortObserver();
+    }
     if(this.get('searchText')) {
       this._searchObserver();
     }
-    this._sortObserver();
+    this._super();
   },
 
   totalPages: function () {
@@ -62,9 +62,6 @@ App.BasicTableComponent = Em.Component.extend({
   }.property('enableSearch', 'enablePagination', 'extraHeaderItem', '_statusMessage'),
 
   _statusMessage: function() {
-    if(this.get('enableStatus') == false) {
-      return null;
-    }
     if(this.get('isSorting')) {
       return "Sorting...";
     }
@@ -72,7 +69,7 @@ App.BasicTableComponent = Em.Component.extend({
       return "Searching...";
     }
     return this.get('statusMessage');
-  }.property('isSearching', 'isSorting', 'statusMessage', 'enableStatus'),
+  }.property('isSearching', 'isSorting', 'statusMessage'),
 
   _pageNumResetObserver: function () {
     this.set('pageNum', 1);
@@ -80,7 +77,7 @@ App.BasicTableComponent = Em.Component.extend({
 
   _searchedRows: function () {
     var regex = this.get('searchRegEx'),
-        rows = this.get('_sortedRows') || [],
+        rows = this.get('rows') || [],
         searchColumnNames,
         columns;
 
@@ -108,7 +105,7 @@ App.BasicTableComponent = Em.Component.extend({
         return columns.some(checkRow, row);
       });
     }
-  }.property('columns.@each', '_sortedRows.@each', 'searchRegEx'),
+  }.property('columns.@each', 'rows.@each', 'searchRegEx'),
 
   _columns: function () {
     var columns = this.get('columns'),
@@ -138,10 +135,8 @@ App.BasicTableComponent = Em.Component.extend({
   }.property('columns'),
 
   _rows: function () {
-    var startIndex = (this.get('pageNum') - 1) * this.get('rowCount'),
-        rows = this.get('_searchedRows').slice(startIndex, startIndex + this.get('rowCount'));
-    this.sendAction('rowsChanged', rows);
-    return rows;
+    var startIndex = (this.get('pageNum') - 1) * this.get('rowCount');
+    return this.get('_searchedRows').slice(startIndex, startIndex + this.get('rowCount'));
   }.property('_searchedRows.@each', 'rowCount', 'pageNum'),
 
   _searchObserver: function () {
@@ -188,7 +183,7 @@ App.BasicTableComponent = Em.Component.extend({
         ascending = this.get('sortOrder') == 'asc',
         that = this;
 
-    if(rows && rows.get('length') > 0 && column) {
+    if(rows.length > 0 && column) {
       this.set('isSorting', true);
 
       Ember.run.later(function () {
@@ -214,7 +209,7 @@ App.BasicTableComponent = Em.Component.extend({
         });
 
         that.setProperties({
-          _sortedRows: sortArray.map(function (record) {
+          rows: sortArray.map(function (record) {
             return record.row;
           }),
           isSorting: false
@@ -222,10 +217,7 @@ App.BasicTableComponent = Em.Component.extend({
 
       }, 400);
     }
-    else {
-      this.set('_sortedRows', rows);
-    }
-  }.observes('sortColumnId', 'sortOrder', 'rows.@each'),
+  }.observes('sortColumnId', 'sortOrder'),
 
   actions: {
     search: function (searchText) {

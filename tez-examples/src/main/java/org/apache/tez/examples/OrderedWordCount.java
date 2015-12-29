@@ -20,7 +20,6 @@ package org.apache.tez.examples;
 
 import java.io.IOException;
 
-import org.apache.tez.client.CallerContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.hadoop.conf.Configuration;
@@ -123,11 +122,10 @@ public class OrderedWordCount extends TezExampleBase {
   }
   
   public static DAG createDAG(TezConfiguration tezConf, String inputPath, String outputPath,
-      int numPartitions, boolean disableSplitGrouping, boolean isGenerateSplitInClient, String dagName) throws IOException {
+      int numPartitions, boolean disableSplitGrouping, String dagName) throws IOException {
 
     DataSourceDescriptor dataSource = MRInput.createConfigBuilder(new Configuration(tezConf),
-        TextInputFormat.class, inputPath).groupSplits(!disableSplitGrouping)
-          .generateSplitsInAM(!isGenerateSplitInClient).build();
+        TextInputFormat.class, inputPath).groupSplits(!disableSplitGrouping).build();
 
     DataSinkDescriptor dataSink = MROutput.createConfigBuilder(new Configuration(tezConf),
         TextOutputFormat.class, outputPath).build();
@@ -199,7 +197,7 @@ public class OrderedWordCount extends TezExampleBase {
       TezClient tezClient) throws Exception {
     DAG dag = createDAG(tezConf, args[0], args[1],
         args.length == 3 ? Integer.parseInt(args[2]) : 1, isDisableSplitGrouping(),
-        isGenerateSplitInClient(), "OrderedWordCount");
+        "OrderedWordCount");
     LOG.info("Running OrderedWordCount");
     return runDag(dag, isCountersLog(), LOG);
   }

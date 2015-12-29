@@ -71,7 +71,6 @@ public class MRCounters extends org.apache.hadoop.mapred.Counters {
     return new MRCounter(raw.findCounter(group, name));
   }
 
-  @Deprecated
   @Override
   public Counter findCounter(String group, int id, String name) {
     return new MRCounter(raw.findCounter(group, name));
@@ -105,8 +104,7 @@ public class MRCounters extends org.apache.hadoop.mapred.Counters {
       }
     }
   }
-
-  @Deprecated
+  
   @Override
   public int size() {
     return countCounters();
@@ -152,16 +150,15 @@ public class MRCounters extends org.apache.hadoop.mapred.Counters {
     public int size() {
       return group.size();
     }
-    @SuppressWarnings("unchecked")
-    @Override
-    public org.apache.hadoop.mapreduce.counters.CounterGroupBase
-    getUnderlyingGroup() {
-      return new MRCounterGroup(group).getUnderlyingGroup();
-    }
     @Override
     public void incrAllCounters(
         org.apache.hadoop.mapreduce.counters.CounterGroupBase rightGroup) {
       new MRCounterGroup(group).incrAllCounters(rightGroup);
+    }
+    @Override
+    public org.apache.hadoop.mapreduce.counters.CounterGroupBase 
+    getUnderlyingGroup() {
+      return new MRCounterGroup(group).getUnderlyingGroup();
     }
     @Override
     public void readFields(DataInput arg0) throws IOException {
@@ -169,7 +166,6 @@ public class MRCounters extends org.apache.hadoop.mapred.Counters {
     @Override
     public void write(DataOutput arg0) throws IOException {
     }
-    @SuppressWarnings("unchecked")
     @Override
     public Iterator iterator() {
       // FIXME?
@@ -212,7 +208,6 @@ public class MRCounters extends org.apache.hadoop.mapred.Counters {
       this.raw = raw;
     }
 
-    @SuppressWarnings("deprecation")
     @Override
     public void setDisplayName(String displayName) {
       // TODO Auto-generated method stub
@@ -287,8 +282,7 @@ public class MRCounters extends org.apache.hadoop.mapred.Counters {
       return raw.hashCode();
     }
   }
-
-  @SuppressWarnings("unchecked")
+  
   static org.apache.tez.common.counters.TezCounter convert(
       org.apache.hadoop.mapred.Counters.Counter counter) {
     org.apache.hadoop.mapreduce.Counter underlyingCounter =

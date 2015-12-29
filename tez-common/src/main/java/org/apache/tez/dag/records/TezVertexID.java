@@ -156,9 +156,9 @@ public class TezVertexID extends TezID {
     return dagId.hashCode() * 530017 + id;
   }
 
-  public static TezVertexID fromString(String vertexIdStr) {
+  public static TezVertexID fromString(String taskIdStr) {
     try {
-      String[] split = vertexIdStr.split("_");
+      String[] split = taskIdStr.split("_");
       String rmId = split[1];
       int appId = TezDAGID.tezAppIdFormat.get().parse(split[2]).intValue();
       int dagId = TezDAGID.tezDagIdFormat.get().parse(split[3]).intValue();

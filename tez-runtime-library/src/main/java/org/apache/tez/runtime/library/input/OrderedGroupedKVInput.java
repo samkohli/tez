@@ -29,7 +29,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import com.google.common.annotations.VisibleForTesting;
 import org.apache.tez.runtime.library.api.IOInterruptedException;
-import org.apache.tez.runtime.library.common.Constants;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.hadoop.classification.InterfaceAudience;
@@ -132,10 +131,8 @@ public class OrderedGroupedKVInput extends AbstractLogicalInput {
       List<Event> pending = new LinkedList<Event>();
       pendingEvents.drainTo(pending);
       if (pending.size() > 0) {
-        if (LOG.isDebugEnabled()) {
-          LOG.debug("NoAutoStart delay in processing first event: "
-              + (System.currentTimeMillis() - firstEventReceivedTime));
-        }
+        LOG.info("NoAutoStart delay in processing first event: "
+            + (System.currentTimeMillis() - firstEventReceivedTime));
         shuffle.handleEvents(pending);
       }
       isStarted.set(true);
@@ -229,7 +226,6 @@ public class OrderedGroupedKVInput extends AbstractLogicalInput {
         return new KeyValuesReader() {
           @Override
           public boolean next() throws IOException {
-            getContext().notifyProgress();
             hasCompletedProcessing();
             completedProcessing = true;
             return false;
@@ -260,7 +256,7 @@ public class OrderedGroupedKVInput extends AbstractLogicalInput {
     synchronized(this) {
       valuesIter = vIter;
     }
-    return new OrderedGroupedKeyValuesReader(valuesIter, getContext());
+    return new OrderedGroupedKeyValuesReader(valuesIter);
   }
 
   @Override
@@ -286,16 +282,10 @@ public class OrderedGroupedKVInput extends AbstractLogicalInput {
   protected synchronized void createValuesIterator()
       throws IOException {
     // Not used by ReduceProcessor
-    RawComparator rawComparator = ConfigUtils.getIntermediateInputKeyComparator(conf);
-    Class<?> keyClass = ConfigUtils.getIntermediateInputKeyClass(conf);
-    Class<?> valClass = ConfigUtils.getIntermediateInputValueClass(conf);
-    LOG.info(getContext().getSourceVertexName() + ": " + "creating ValuesIterator with "
-        + "comparator=" + rawComparator.getClass().getName()
-        + ", keyClass=" + keyClass.getName()
-        + ", valClass=" + valClass.getName());
-
-    vIter = new ValuesIterator(rawIter, rawComparator, keyClass, valClass,
-        conf, inputKeyCounter, inputValueCounter);
+    vIter = new ValuesIterator(rawIter,
+        (RawComparator) ConfigUtils.getIntermediateInputKeyComparator(conf),
+        ConfigUtils.getIntermediateInputKeyClass(conf),
+        ConfigUtils.getIntermediateInputValueClass(conf), conf, inputKeyCounter, inputValueCounter);
 
   }
 
@@ -308,16 +298,13 @@ public class OrderedGroupedKVInput extends AbstractLogicalInput {
   private static class OrderedGroupedKeyValuesReader extends KeyValuesReader {
 
     private final ValuesIterator valuesIter;
-    private final InputContext context;
 
-    OrderedGroupedKeyValuesReader(ValuesIterator valuesIter, InputContext context) {
+    OrderedGroupedKeyValuesReader(ValuesIterator valuesIter) {
       this.valuesIter = valuesIter;
-      this.context = context;
     }
 
     @Override
     public boolean next() throws IOException {
-      context.notifyProgress();
       return valuesIter.moveToNext();
     }
 
@@ -359,20 +346,6 @@ public class OrderedGroupedKVInput extends AbstractLogicalInput {
     confKeys.add(TezRuntimeConfiguration.TEZ_RUNTIME_SHUFFLE_MERGE_PERCENT);
     confKeys.add(TezRuntimeConfiguration.TEZ_RUNTIME_SHUFFLE_MEMTOMEM_SEGMENTS);
     confKeys.add(TezRuntimeConfiguration.TEZ_RUNTIME_SHUFFLE_ENABLE_MEMTOMEM);
-    confKeys.add(TezRuntimeConfiguration
-        .TEZ_RUNTIME_SHUFFLE_SOURCE_ATTEMPT_ABORT_LIMIT);
-    confKeys.add(TezRuntimeConfiguration
-        .TEZ_RUNTIME_SHUFFLE_ACCEPTABLE_HOST_FETCH_FAILURE_FRACTION);
-    confKeys.add(TezRuntimeConfiguration
-        .TEZ_RUNTIME_SHUFFLE_MIN_FAILURES_PER_HOST);
-    confKeys.add(TezRuntimeConfiguration
-        .TEZ_RUNTIME_SHUFFLE_MAX_STALL_TIME_FRACTION);
-    confKeys.add(TezRuntimeConfiguration
-        .TEZ_RUNTIME_SHUFFLE_MAX_ALLOWED_FAILED_FETCH_ATTEMPT_FRACTION);
-    confKeys.add(TezRuntimeConfiguration
-        .TEZ_RUNTIME_SHUFFLE_MIN_REQUIRED_PROGRESS_FRACTION);
-    confKeys.add(TezRuntimeConfiguration
-        .TEZ_RUNTIME_SHUFFLE_FAILED_CHECK_SINCE_LAST_COMPLETION);
     confKeys.add(TezRuntimeConfiguration.TEZ_RUNTIME_INPUT_POST_MERGE_BUFFER_PERCENT);
     confKeys.add(TezRuntimeConfiguration.TEZ_RUNTIME_GROUP_COMPARATOR_CLASS);
     confKeys.add(TezRuntimeConfiguration.TEZ_RUNTIME_KEY_COMPARATOR_CLASS);
@@ -388,7 +361,6 @@ public class OrderedGroupedKVInput extends AbstractLogicalInput {
     confKeys.add(TezConfiguration.TEZ_COUNTERS_COUNTER_NAME_MAX_LENGTH);
     confKeys.add(TezConfiguration.TEZ_COUNTERS_MAX_GROUPS);
     confKeys.add(TezRuntimeConfiguration.TEZ_RUNTIME_CLEANUP_FILES_ON_INTERRUPT);
-    confKeys.add(Constants.TEZ_RUNTIME_TASK_MEMORY);
   }
 
   // TODO Maybe add helper methods to extract keys

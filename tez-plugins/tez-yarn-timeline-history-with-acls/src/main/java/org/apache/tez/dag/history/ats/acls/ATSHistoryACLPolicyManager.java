@@ -24,7 +24,6 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
-import org.apache.hadoop.service.Service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.hadoop.conf.Configuration;
@@ -33,6 +32,7 @@ import org.apache.hadoop.yarn.api.records.ApplicationId;
 import org.apache.hadoop.yarn.api.records.timeline.TimelineDomain;
 import org.apache.hadoop.yarn.api.records.timeline.TimelineEntity;
 import org.apache.hadoop.yarn.client.api.TimelineClient;
+import org.apache.hadoop.yarn.exceptions.YarnException;
 import org.apache.tez.common.security.ACLConfigurationParser;
 import org.apache.tez.common.security.ACLManager;
 import org.apache.tez.common.security.ACLType;
@@ -42,6 +42,8 @@ import org.apache.tez.common.security.HistoryACLPolicyException;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.tez.dag.api.TezConfiguration;
 import org.apache.tez.dag.api.TezUncheckedException;
+
+import com.google.common.annotations.VisibleForTesting;
 
 public class ATSHistoryACLPolicyManager implements HistoryACLPolicyManager {
 
@@ -246,13 +248,6 @@ public class ATSHistoryACLPolicyManager implements HistoryACLPolicyManager {
     }
     TimelineEntity entity = (TimelineEntity) timelineEntity;
     entity.setDomainId(domainId);
-  }
-
-  @Override
-  public void close() {
-    if (timelineClient != null && timelineClient.isInState(Service.STATE.STARTED)) {
-      timelineClient.stop();
-    }
   }
 
 }

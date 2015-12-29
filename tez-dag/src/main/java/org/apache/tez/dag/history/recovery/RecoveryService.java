@@ -34,7 +34,6 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.service.AbstractService;
 import org.apache.tez.common.TezCommonUtils;
-import org.apache.tez.common.TezUtilsInternal;
 import org.apache.tez.dag.api.TezConfiguration;
 import org.apache.tez.dag.api.TezConstants;
 import org.apache.tez.dag.app.AppContext;
@@ -51,7 +50,7 @@ import com.google.common.annotations.VisibleForTesting;
 public class RecoveryService extends AbstractService {
 
   private static final Logger LOG = LoggerFactory.getLogger(RecoveryService.class);
-  protected final AppContext appContext;
+  private final AppContext appContext;
 
   public static final String RECOVERY_FATAL_OCCURRED_DIR =
       "RecoveryFatalErrorOccurred";
@@ -74,7 +73,7 @@ public class RecoveryService extends AbstractService {
   private Set<TezDAGID> completedDAGs = new HashSet<TezDAGID>();
   private Set<TezDAGID> skippedDAGs = new HashSet<TezDAGID>();
 
-  public Thread eventHandlingThread;
+  private Thread eventHandlingThread;
   private AtomicBoolean stopped = new AtomicBoolean(false);
   private AtomicBoolean started = new AtomicBoolean(false);
   private int eventCounter = 0;
@@ -107,6 +106,7 @@ public class RecoveryService extends AbstractService {
 
   @Override
   public void serviceInit(Configuration conf) throws Exception {
+    LOG.info("Initializing RecoveryService");
     recoveryPath = appContext.getCurrentRecoveryDir();
     recoveryDirFS = FileSystem.get(recoveryPath.toUri(), conf);
     bufferSize = conf.getInt(TezConfiguration.DAG_RECOVERY_FILE_IO_BUFFER_SIZE,
@@ -120,22 +120,15 @@ public class RecoveryService extends AbstractService {
     drainEventsFlag = conf.getBoolean(
         TEZ_TEST_RECOVERY_DRAIN_EVENTS_WHEN_STOPPED,
         TEZ_TEST_RECOVERY_DRAIN_EVENTS_WHEN_STOPPED_DEFAULT);
-
-    LOG.info("RecoveryService initialized with "
-      + "recoveryPath=" + recoveryPath
-      + ", bufferSize(bytes)=" + bufferSize
-      + ", flushInterval(s)=" + flushInterval
-      + ", maxUnflushedEvents=" + maxUnflushedEvents);
   }
 
   @Override
   public void serviceStart() {
+    LOG.info("Starting RecoveryService");
     lastFlushTime = appContext.getClock().getTime();
     eventHandlingThread = new Thread(new Runnable() {
       @Override
       public void run() {
-        TezUtilsInternal.setHadoopCallerContext(appContext.getHadoopShim(),
-            appContext.getApplicationID());
         DAGHistoryEvent event;
         while (!stopped.get() && !Thread.currentThread().isInterrupted()) {
           drained = eventQueue.isEmpty();
@@ -222,12 +215,7 @@ public class RecoveryService extends AbstractService {
           summaryStream.hflush();
           summaryStream.close();
         } catch (IOException ioe) {
-          if (!recoveryDirFS.exists(recoveryPath)) {
-            LOG.warn("Ignoring error while closing summary stream."
-                + " The recovery directory at {} has already been deleted externally", recoveryPath);
-          } else {
-            LOG.warn("Error when closing summary stream", ioe);
-          }
+          LOG.warn("Error when closing summary stream", ioe);
         }
       }
       for (Entry<TezDAGID, FSDataOutputStream> entry : outputStreamMap.entrySet()) {
@@ -236,14 +224,7 @@ public class RecoveryService extends AbstractService {
           entry.getValue().hflush();
           entry.getValue().close();
         } catch (IOException ioe) {
-          if (!recoveryDirFS.exists(recoveryPath)) {
-            LOG.warn("Ignoring error while closing output stream."
-                + " The recovery directory at {} has already been deleted externally", recoveryPath);
-            // avoid closing other outputStream as the recovery directory has already been deleted.
-            break;
-          } else {
-            LOG.warn("Error when closing output stream", ioe);
-          }
+          LOG.warn("Error when closing output stream", ioe);
         }
       }
     }
@@ -309,13 +290,11 @@ public class RecoveryService extends AbstractService {
         try {
           SummaryEvent summaryEvent = (SummaryEvent) event.getHistoryEvent();
           handleSummaryEvent(dagId, eventType, summaryEvent);
+          summaryStream.hflush();
           if (summaryEvent.writeToRecoveryImmediately()) {
             handleRecoveryEvent(event);
-            // outputStream may already be closed and removed
-            if (outputStreamMap.containsKey(event.getDagID())) {
-              doFlush(outputStreamMap.get(event.getDagID()),
-                  appContext.getClock().getTime());
-            }
+            doFlush(outputStreamMap.get(event.getDagID()),
+                appContext.getClock().getTime());
           } else {
             if (LOG.isDebugEnabled()) {
               LOG.debug("Queueing Non-immediate Summary/Recovery event of type"
@@ -341,7 +320,23 @@ public class RecoveryService extends AbstractService {
         } catch (IOException ioe) {
           LOG.error("Error handling summary event"
               + ", eventType=" + event.getHistoryEvent().getEventType(), ioe);
-          createFatalErrorFlagDir();
+          Path fatalErrorDir = new Path(recoveryPath, RECOVERY_FATAL_OCCURRED_DIR);
+          try {
+            LOG.error("Adding a flag to ensure next AM attempt does not start up"
+                + ", flagFile=" + fatalErrorDir.toString());
+            recoveryFatalErrorOccurred.set(true);
+            recoveryDirFS.mkdirs(fatalErrorDir);
+            if (recoveryDirFS.exists(fatalErrorDir)) {
+              LOG.error("Recovery failure occurred. Skipping all events");
+            } else {
+              // throw error if fatal error flag could not be set
+              throw ioe;
+            }
+          } catch (IOException e) {
+            LOG.error("Failed to create fatal error flag dir "
+                + fatalErrorDir.toString(), e);
+            throw ioe;
+          }
           if (eventType.equals(HistoryEventType.DAG_SUBMITTED)) {
             // Throw error to tell client that dag submission failed
             throw ioe;
@@ -357,27 +352,7 @@ public class RecoveryService extends AbstractService {
     }
   }
 
-  private void createFatalErrorFlagDir() throws IOException {
-    Path fatalErrorDir = new Path(recoveryPath, RECOVERY_FATAL_OCCURRED_DIR);
-    try {
-      LOG.error("Adding a flag to ensure next AM attempt does not start up"
-          + ", flagFile=" + fatalErrorDir.toString());
-      recoveryFatalErrorOccurred.set(true);
-      recoveryDirFS.mkdirs(fatalErrorDir);
-      if (recoveryDirFS.exists(fatalErrorDir)) {
-        LOG.error("Recovery failure occurred. Skipping all events");
-      } else {
-        // throw error if fatal error flag could not be set
-        throw new IOException("Failed to create fatal error flag dir "
-            + fatalErrorDir.toString());
-      }
-    } catch (IOException e) {
-      LOG.error("Failed to create fatal error flag dir "
-          + fatalErrorDir.toString(), e);
-    }
-  }
-
-  protected void handleSummaryEvent(TezDAGID dagID,
+  private void handleSummaryEvent(TezDAGID dagID,
       HistoryEventType eventType,
       SummaryEvent summaryEvent) throws IOException {
     if (LOG.isDebugEnabled()) {
@@ -394,8 +369,7 @@ public class RecoveryService extends AbstractService {
         summaryStream = recoveryDirFS.create(summaryPath, false,
             bufferSize);
       } else {
-        createFatalErrorFlagDir();
-        return;
+        summaryStream = recoveryDirFS.append(summaryPath, bufferSize);
       }
     }
     if (LOG.isDebugEnabled()) {
@@ -404,7 +378,6 @@ public class RecoveryService extends AbstractService {
           + ", eventType=" + eventType);
     }
     summaryEvent.toSummaryProtoStream(summaryStream);
-    summaryStream.hflush();
   }
 
   @VisibleForTesting
@@ -432,8 +405,11 @@ public class RecoveryService extends AbstractService {
       Path dagFilePath = TezCommonUtils.getDAGRecoveryPath(recoveryPath, dagID.toString());
       FSDataOutputStream outputStream;
       if (recoveryDirFS.exists(dagFilePath)) {
-        createFatalErrorFlagDir();
-        return;
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("Opening DAG recovery file in append mode"
+              + ", filePath=" + dagFilePath);
+        }
+        outputStream = recoveryDirFS.append(dagFilePath, bufferSize);
       } else {
         if (LOG.isDebugEnabled()) {
           LOG.debug("Opening DAG recovery file in create mode"
@@ -508,9 +484,5 @@ public class RecoveryService extends AbstractService {
     while (!this.drained) {
       Thread.yield();
     }
-  }
-
-  public void setStopped(boolean stopped) {
-    this.stopped.set(stopped);
   }
 }

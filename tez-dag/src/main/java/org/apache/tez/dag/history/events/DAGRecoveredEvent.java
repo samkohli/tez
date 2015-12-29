@@ -39,12 +39,11 @@ public class DAGRecoveredEvent implements HistoryEvent {
   private final String user;
 
   private boolean historyLoggingEnabled = true;
-  private String containerLogs;
 
   public DAGRecoveredEvent(ApplicationAttemptId applicationAttemptId,
       TezDAGID dagId, String dagName, String user,
       long recoveredTime, DAGState recoveredState,
-      String recoveryFailureReason, String containerLogs) {
+      String recoveryFailureReason) {
     this.applicationAttemptId = applicationAttemptId;
     this.dagID = dagId;
     this.dagName = dagName;
@@ -52,12 +51,11 @@ public class DAGRecoveredEvent implements HistoryEvent {
     this.recoveredTime = recoveredTime;
     this.recoveredDagState = recoveredState;
     this.recoveryFailureReason = recoveryFailureReason;
-    this.containerLogs = containerLogs;
   }
 
   public DAGRecoveredEvent(ApplicationAttemptId applicationAttemptId,
-      TezDAGID dagId, String dagName, String user, long recoveredTime, String containerLogs) {
-    this(applicationAttemptId, dagId, dagName, user, recoveredTime, null, null, containerLogs);
+      TezDAGID dagId, String dagName, String user, long recoveredTime) {
+    this(applicationAttemptId, dagId, dagName, user, recoveredTime, null, null);
   }
 
   @Override
@@ -121,10 +119,6 @@ public class DAGRecoveredEvent implements HistoryEvent {
 
   public void setHistoryLoggingEnabled(boolean historyLoggingEnabled) {
     this.historyLoggingEnabled = historyLoggingEnabled;
-  }
-
-  public String getContainerLogs() {
-    return containerLogs;
   }
 
   @Override

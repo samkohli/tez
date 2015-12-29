@@ -52,12 +52,7 @@ App.BasicTableComponent.HeaderCellView = Ember.View.extend({
 
   actions: {
     sort: function () {
-      var column = this.get('column'),
-          onSort = column.get('onSort');
-
-      if(!onSort || onSort.call(column, column)) {
-        this.get('parentView').send('sort', this.get('column.id'));
-      }
+      this.get('parentView').send('sort', this.get('column.id'));
     },
     startColResize: function () {
       var mouseTracker = {
