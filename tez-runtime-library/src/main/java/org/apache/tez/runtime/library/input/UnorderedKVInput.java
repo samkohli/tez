@@ -24,6 +24,8 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import org.apache.tez.common.TezUtilsInternal;
+import org.apache.tez.runtime.library.common.Constants;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.hadoop.classification.InterfaceAudience;
@@ -131,7 +133,8 @@ public class UnorderedKVInput extends AbstractLogicalInput {
       ifileBufferSize = conf.getInt("io.file.buffer.size",
           TezRuntimeConfiguration.TEZ_RUNTIME_IFILE_BUFFER_SIZE_DEFAULT);
 
-      this.inputManager = new SimpleFetchedInputAllocator(getContext().getUniqueIdentifier(), conf,
+      this.inputManager = new SimpleFetchedInputAllocator(
+          TezUtilsInternal.cleanVertexName(getContext().getSourceVertexName()), getContext().getUniqueIdentifier(), conf,
           getContext().getTotalMemoryAvailableToTask(),
           memoryUpdateCallbackHandler.getMemoryAssigned());
 
@@ -149,8 +152,10 @@ public class UnorderedKVInput extends AbstractLogicalInput {
       List<Event> pending = new LinkedList<Event>();
       pendingEvents.drainTo(pending);
       if (pending.size() > 0) {
-        LOG.info("NoAutoStart delay in processing first event: "
-            + (System.currentTimeMillis() - firstEventReceivedTime));
+        if (LOG.isDebugEnabled()) {
+          LOG.debug(getContext().getSourceVertexName() + ": " + "NoAutoStart delay in processing first event: "
+              + (System.currentTimeMillis() - firstEventReceivedTime));
+        }
         inputEventHandler.handleEvents(pending);
       }
       isStarted.set(true);
@@ -164,6 +169,7 @@ public class UnorderedKVInput extends AbstractLogicalInput {
       return new KeyValueReader() {
         @Override
         public boolean next() throws IOException {
+          getContext().notifyProgress();
           hasCompletedProcessing();
           completedProcessing = true;
           return false;
@@ -207,6 +213,10 @@ public class UnorderedKVInput extends AbstractLogicalInput {
 
   @Override
   public synchronized List<Event> close() throws Exception {
+    if (this.inputEventHandler != null) {
+      this.inputEventHandler.logProgress(true);
+    }
+
     if (this.shuffleManager != null) {
       this.shuffleManager.shutdown();
     }
@@ -217,7 +227,7 @@ public class UnorderedKVInput extends AbstractLogicalInput {
     long inputRecords = getContext().getCounters()
         .findCounter(TaskCounter.INPUT_RECORDS_PROCESSED).getValue();
     getContext().getStatisticsReporter().reportItemsProcessed(inputRecords);
-    
+
     return null;
   }
 
@@ -232,7 +242,7 @@ public class UnorderedKVInput extends AbstractLogicalInput {
       int ifileBufferSize, boolean ifileReadAheadEnabled, int ifileReadAheadLength)
       throws IOException {
     return new UnorderedKVReader(shuffleManager, conf, codec, ifileReadAheadEnabled,
-        ifileReadAheadLength, ifileBufferSize, inputRecordCounter);
+        ifileReadAheadLength, ifileBufferSize, inputRecordCounter, getContext());
   }
 
   private static final Set<String> confKeys = new HashSet<String>();
@@ -269,6 +279,7 @@ public class UnorderedKVInput extends AbstractLogicalInput {
     confKeys.add(TezConfiguration.TEZ_COUNTERS_COUNTER_NAME_MAX_LENGTH);
     confKeys.add(TezConfiguration.TEZ_COUNTERS_MAX_GROUPS);
     confKeys.add(TezRuntimeConfiguration.TEZ_RUNTIME_CLEANUP_FILES_ON_INTERRUPT);
+    confKeys.add(Constants.TEZ_RUNTIME_TASK_MEMORY);
   }
 
   // TODO Maybe add helper methods to extract keys

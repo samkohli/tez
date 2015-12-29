@@ -24,18 +24,21 @@ import java.util.Set;
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.security.Credentials;
 import org.apache.hadoop.yarn.api.records.ApplicationAccessType;
 import org.apache.hadoop.yarn.api.records.ApplicationAttemptId;
 import org.apache.hadoop.yarn.api.records.ApplicationId;
 import org.apache.hadoop.yarn.event.EventHandler;
 import org.apache.hadoop.yarn.util.Clock;
+import org.apache.tez.dag.app.RecoveryParser.DAGRecoveryData;
 import org.apache.tez.dag.app.dag.DAG;
-import org.apache.tez.dag.app.rm.TaskSchedulerEventHandler;
+import org.apache.tez.dag.app.rm.TaskSchedulerManager;
 import org.apache.tez.dag.app.rm.container.AMContainerMap;
 import org.apache.tez.dag.app.rm.node.AMNodeTracker;
 import org.apache.tez.common.security.ACLManager;
 import org.apache.tez.dag.history.HistoryEventHandler;
 import org.apache.tez.dag.records.TezDAGID;
+import org.apache.tez.hadoop.shim.HadoopShim;
 
 import com.google.common.util.concurrent.ListeningExecutorService;
 
@@ -74,6 +77,8 @@ public interface AppContext {
 
   void setDAG(DAG dag);
 
+  void setDAGRecoveryData(DAGRecoveryData dagRecoveryData);
+
   Set<String> getAllDAGIDs();
 
   @SuppressWarnings("rawtypes")
@@ -87,7 +92,7 @@ public interface AppContext {
 
   AMNodeTracker getNodeTracker();
 
-  TaskSchedulerEventHandler getTaskScheduler();
+  TaskSchedulerManager getTaskScheduler();
 
   boolean isSession();
 
@@ -112,4 +117,17 @@ public interface AppContext {
   /** Whether the AM is in the process of shutting down/completing */
   boolean isAMInCompletionState();
 
+  Credentials getAppCredentials();
+
+  public Integer getTaskCommunicatorIdentifier(String name);
+  public Integer getTaskScheduerIdentifier(String name);
+  public Integer getContainerLauncherIdentifier(String name);
+
+  public String getTaskCommunicatorName(int taskCommId);
+  public String getTaskSchedulerName(int schedulerId);
+  public String getContainerLauncherName(int launcherId);
+
+  public HadoopShim getHadoopShim();
+
+  public DAGRecoveryData getDAGRecoveryData();
 }

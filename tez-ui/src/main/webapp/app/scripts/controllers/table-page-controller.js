@@ -16,7 +16,7 @@
  * limitations under the License.
  */
 
-App.TablePageController = Em.ObjectController.extend(
+App.TablePageController = App.PollingController.extend(
     App.DataArrayLoaderMixin,
     App.ColumnSelectorMixin, {
       queryParams: ['pageNum', 'rowCount', 'searchText', 'sortColumnId', 'sortOrder'],
@@ -28,16 +28,54 @@ App.TablePageController = Em.ObjectController.extend(
       rowCount: 25,
 
       searchText: '',
+      rowsDisplayed: [],
 
       isRefreshable: true,
+
+      parentStatus: null,
+
+      rowsDisplayedObserver: function () {
+        this.set('pollster.targetRecords', this.get('rowsDisplayed'));
+      }.observes('rowsDisplayed', 'pollster'),
+
+      parentStatusObserver: function () {
+        var parentStatus = this.get('status'),
+            previousStatus = this.get('parentStatus');
+
+        if(parentStatus != previousStatus && previousStatus == 'RUNNING' && this.get('pollingEnabled')) {
+          this.get('pollster').stop();
+          this.loadData(true);
+        }
+        this.set('parentStatus', parentStatus);
+      }.observes('status'),
+
+      applicationComplete: function () {
+        this.set('pollster.polledRecords', null);
+        this.loadData(true);
+      },
 
       statusMessage: function () {
         return this.get('loading') ? "Loading all records..." : null;
       }.property('loading'),
 
+      onInProgressColumnSort: function (columnDef) {
+        var inProgress = this.get('pollster.isRunning');
+        if(inProgress) {
+          App.Helpers.Dialogs.alert(
+            'Cannot sort',
+            'Sorting on %@ is disabled for running DAGs!'.fmt(columnDef.get('headerCellName')),
+            this
+          );
+        }
+        return !inProgress;
+      },
+
       actions: {
         refresh: function () {
           this.loadData(true);
+        },
+        tableRowsChanged: function (rows) {
+          this.set('rowsDisplayed', rows);
         }
       }
     }

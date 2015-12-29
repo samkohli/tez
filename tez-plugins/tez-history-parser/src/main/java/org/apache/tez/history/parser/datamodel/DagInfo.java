@@ -32,6 +32,8 @@ import org.apache.commons.collections.BidiMap;
 import org.apache.commons.collections.bidimap.DualHashBidiMap;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.util.StringInterner;
+import org.apache.tez.client.CallerContext;
 import org.apache.tez.dag.api.event.VertexState;
 import org.codehaus.jettison.json.JSONArray;
 import org.codehaus.jettison.json.JSONException;
@@ -64,6 +66,7 @@ public class DagInfo extends BaseInfo {
   private final String status;
   private final String diagnostics;
   private VersionInfo versionInfo;
+  private CallerContext callerContext;
 
   //VertexID --> VertexName & vice versa
   private final BidiMap vertexNameIDMapping;
@@ -91,7 +94,7 @@ public class DagInfo extends BaseInfo {
     Preconditions.checkArgument(jsonObject.getString(Constants.ENTITY_TYPE).equalsIgnoreCase
         (Constants.TEZ_DAG_ID));
 
-    dagId = jsonObject.getString(Constants.ENTITY);
+    dagId = StringInterner.weakIntern(jsonObject.getString(Constants.ENTITY));
 
     //Parse additional Info
     JSONObject otherInfoNode = jsonObject.getJSONObject(Constants.OTHER_INFO);
@@ -102,7 +105,7 @@ public class DagInfo extends BaseInfo {
     diagnostics = otherInfoNode.optString(Constants.DIAGNOSTICS);
     failedTasks = otherInfoNode.optInt(Constants.NUM_FAILED_TASKS);
     JSONObject dagPlan = otherInfoNode.optJSONObject(Constants.DAG_PLAN);
-    name = (dagPlan != null) ? (dagPlan.optString(Constants.DAG_NAME)) : null;
+    name = StringInterner.weakIntern((dagPlan != null) ? (dagPlan.optString(Constants.DAG_NAME)) : null);
     if (dagPlan != null) {
       JSONArray vertices = dagPlan.optJSONArray(Constants.VERTICES);
       if (vertices != null) {
@@ -114,7 +117,7 @@ public class DagInfo extends BaseInfo {
     } else {
       numVertices = 0;
     }
-    status = otherInfoNode.optString(Constants.STATUS);
+    status = StringInterner.weakIntern(otherInfoNode.optString(Constants.STATUS));
 
     //parse name id mapping
     JSONObject vertexIDMappingJson = otherInfoNode.optJSONObject(Constants.VERTEX_NAME_ID_MAPPING);
@@ -134,10 +137,34 @@ public class DagInfo extends BaseInfo {
   }
 
   private void parseDAGPlan(JSONObject dagPlan) throws JSONException {
+    int version = dagPlan.optInt(Constants.VERSION, 1);
     parseEdges(dagPlan.optJSONArray(Constants.EDGES));
 
     JSONArray verticesInfo = dagPlan.optJSONArray(Constants.VERTICES);
     parseBasicVertexInfo(verticesInfo);
+
+    if (version > 1) {
+      parseDAGContext(dagPlan.optJSONObject(Constants.DAG_CONTEXT));
+    }
+  }
+
+  private void parseDAGContext(JSONObject callerContextInfo) {
+    if (callerContextInfo == null) {
+      LOG.info("No DAG Caller Context available");
+      return;
+    }
+    String context = callerContextInfo.optString(Constants.CONTEXT);
+    String callerId = callerContextInfo.optString(Constants.CALLER_ID);
+    String callerType = callerContextInfo.optString(Constants.CALLER_TYPE);
+    String description = callerContextInfo.optString(Constants.DESCRIPTION);
+
+    this.callerContext = CallerContext.create(context, description);
+    if (callerId != null && !callerId.isEmpty() && callerType != null && !callerType.isEmpty()) {
+      this.callerContext.setCallerIdAndType(callerId, callerType);
+    } else {
+      LOG.info("No DAG Caller Context Id and Type available");
+    }
+
   }
 
   private void parseBasicVertexInfo(JSONArray verticesInfo) throws JSONException {
@@ -307,9 +334,9 @@ public class DagInfo extends BaseInfo {
     sb.append("dagID=").append(getDagId()).append(", ");
     sb.append("dagName=").append(getName()).append(", ");
     sb.append("status=").append(getStatus()).append(", ");
-    sb.append("startTime=").append(getStartTime()).append(", ");
-    sb.append("submitTime=").append(getAbsoluteSubmitTime()).append(", ");
-    sb.append("endTime=").append(getFinishTime()).append(", ");
+    sb.append("startTime=").append(getStartTimeInterval()).append(", ");
+    sb.append("submitTime=").append(getSubmitTime()).append(", ");
+    sb.append("endTime=").append(getFinishTimeInterval()).append(", ");
     sb.append("timeTaken=").append(getTimeTaken()).append(", ");
     sb.append("diagnostics=").append(getDiagnostics()).append(", ");
     sb.append("vertexNameIDMapping=").append(getVertexNameIDMapping()).append(", ");
@@ -328,6 +355,10 @@ public class DagInfo extends BaseInfo {
     return versionInfo;
   }
 
+  public final CallerContext getCallerContext() {
+    return callerContext;
+  }
+
   public final String getName() {
     return name;
   }
@@ -336,15 +367,15 @@ public class DagInfo extends BaseInfo {
     return Collections.unmodifiableCollection(edgeInfoMap.values());
   }
 
-  public final long getAbsoluteSubmitTime() {
+  public final long getSubmitTime() {
     return submitTime;
   }
 
-  public final long getAbsStartTime() {
+  public final long getStartTime() {
     return startTime;
   }
 
-  public final long getAbsFinishTime() {
+  public final long getFinishTime() {
     return endTime;
   }
 
@@ -354,24 +385,24 @@ public class DagInfo extends BaseInfo {
    *
    * @return starting time w.r.t to dag
    */
-  public final long getStartTime() {
+  public final long getStartTimeInterval() {
     return 0;
   }
 
   @Override
-  public final long getFinishTime() {
+  public final long getFinishTimeInterval() {
     long dagEndTime = (endTime - startTime);
     if (dagEndTime < 0) {
       //probably dag is not complete or failed in middle. get the last task attempt time
       for (VertexInfo vertexInfo : getVertices()) {
-        dagEndTime = (vertexInfo.getFinishTime() > dagEndTime) ? vertexInfo.getFinishTime() : dagEndTime;
+        dagEndTime = (vertexInfo.getFinishTimeInterval() > dagEndTime) ? vertexInfo.getFinishTimeInterval() : dagEndTime;
       }
     }
     return dagEndTime;
   }
 
   public final long getTimeTaken() {
-    return getFinishTime();
+    return getFinishTimeInterval();
   }
 
   public final String getStatus() {
@@ -412,8 +443,8 @@ public class DagInfo extends BaseInfo {
     Collections.sort(vertices, new Comparator<VertexInfo>() {
 
       @Override public int compare(VertexInfo o1, VertexInfo o2) {
-        return (o1.getStartTime() < o2.getStartTime()) ? -1 :
-            ((o1.getStartTime() == o2.getStartTime()) ?
+        return (o1.getStartTimeInterval() < o2.getStartTimeInterval()) ? -1 :
+            ((o1.getStartTimeInterval() == o2.getStartTimeInterval()) ?
                 0 : 1);
       }
     });

@@ -39,15 +39,31 @@ App.Helpers.ErrorBar = (function () {
      */
     show: function (message, details) {
       var errorBar = $('.error-bar'),
-          messageElement;
+          messageElement,
+          lineEndIndex;
 
       errorBar.find('.expander').unbind('click');
       errorBar.find('.details').removeClass('visible');
 
+      if(typeof message == 'string') {
+        lineEndIndex = message.indexOf('\n');
+
+        if(lineEndIndex == -1) {
+          lineEndIndex = message.indexOf('<br');
+        }
+
+        if(lineEndIndex != -1) {
+          details = details ? "<br />" + details : "";
+          details = message.substr(lineEndIndex) + details;
+          message = message.substr(0, lineEndIndex);
+        }
+      }
+
       if(details) {
         messageElement = $('<a class="expander" href="#">' + message + '</a>');
-        messageElement.click(function () {
+        messageElement.click(function (event) {
           errorBar.find('.details').toggleClass('visible');
+          event.preventDefault();
         });
 
         errorBar.find('.details').html(details.replace(/\n/g, "<br />"));

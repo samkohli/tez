@@ -44,6 +44,7 @@ import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.api.records.URL;
 import org.apache.hadoop.yarn.api.records.impl.pb.LocalResourcePBImpl;
 import org.apache.hadoop.yarn.util.ConverterUtils;
+import org.apache.tez.client.CallerContext;
 import org.apache.tez.client.TezAppMasterStatus;
 import org.apache.tez.common.TezCommonUtils;
 import org.apache.tez.common.counters.CounterGroup;
@@ -52,9 +53,12 @@ import org.apache.tez.common.counters.TezCounters;
 import org.apache.tez.dag.api.EdgeProperty.DataMovementType;
 import org.apache.tez.dag.api.EdgeProperty.DataSourceType;
 import org.apache.tez.dag.api.EdgeProperty.SchedulingType;
+import org.apache.tez.dag.api.Vertex.VertexExecutionContext;
 import org.apache.tez.dag.api.client.StatusGetOpts;
 import org.apache.tez.dag.api.client.rpc.DAGClientAMProtocolRPC.TezAppMasterStatusProto;
 import org.apache.tez.dag.api.records.DAGProtos;
+import org.apache.tez.dag.api.records.DAGProtos.AMPluginDescriptorProto;
+import org.apache.tez.dag.api.records.DAGProtos.CallerContextProto;
 import org.apache.tez.dag.api.records.DAGProtos.ConfigurationProto;
 import org.apache.tez.dag.api.records.DAGProtos.EdgePlan;
 import org.apache.tez.dag.api.records.DAGProtos.PlanEdgeDataMovementType;
@@ -73,11 +77,14 @@ import org.apache.tez.dag.api.records.DAGProtos.TezCounterGroupProto;
 import org.apache.tez.dag.api.records.DAGProtos.TezCounterProto;
 import org.apache.tez.dag.api.records.DAGProtos.TezCountersProto;
 import org.apache.tez.dag.api.records.DAGProtos.TezEntityDescriptorProto;
+import org.apache.tez.dag.api.records.DAGProtos.TezNamedEntityDescriptorProto;
+import org.apache.tez.dag.api.records.DAGProtos.VertexExecutionContextProto;
 import org.apache.tez.dag.api.records.DAGProtos.VertexLocationHintProto;
 
 import com.google.common.collect.Lists;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.ByteString.Output;
+import org.apache.tez.serviceplugins.api.ServicePluginsDescriptor;
 
 @Private
 public class DagTypeConverters {
@@ -399,6 +406,8 @@ public class DagTypeConverters {
     return userPayload;
   }
 
+
+
   private static void setUserPayload(EntityDescriptor<?> entity, UserPayload payload) {
     if (payload != null) {
       entity.setUserPayload(payload);
@@ -421,6 +430,15 @@ public class DagTypeConverters {
     OutputDescriptor od = OutputDescriptor.create(className);
     setUserPayload(od, payload);
     return od;
+  }
+
+  public static NamedEntityDescriptor convertNamedDescriptorFromProto(TezNamedEntityDescriptorProto proto) {
+    String name = proto.getName();
+    String className = proto.getEntityDescriptor().getClassName();
+    UserPayload payload = convertTezUserPayloadFromDAGPlan(proto.getEntityDescriptor());
+    NamedEntityDescriptor descriptor = new NamedEntityDescriptor(name, className);
+    setUserPayload(descriptor, payload);
+    return descriptor;
   }
 
   public static InputInitializerDescriptor convertInputInitializerDescriptorFromDAGPlan(
@@ -507,7 +525,7 @@ public class DagTypeConverters {
       PlanLocalResourcesProto.newBuilder();
     for (Map.Entry<String, LocalResource> entry : localResources.entrySet()) {
       PlanLocalResource plr = convertLocalResourceToPlanLocalResource(
-        entry.getKey(), entry.getValue());
+          entry.getKey(), entry.getValue());
       builder.addLocalResources(plr);
     }
     return builder.build();
@@ -550,11 +568,11 @@ public class DagTypeConverters {
   public static LocalResource convertPlanLocalResourceToLocalResource(
       PlanLocalResource plr) {
     return LocalResource.newInstance(
-      ConverterUtils.getYarnUrlFromPath(new Path(plr.getUri())),
-      DagTypeConverters.convertFromDAGPlan(plr.getType()),
-      DagTypeConverters.convertFromDAGPlan(plr.getVisibility()),
-      plr.getSize(), plr.getTimeStamp(),
-      plr.hasPattern() ? plr.getPattern() : null);
+        ConverterUtils.getYarnUrlFromPath(new Path(plr.getUri())),
+        DagTypeConverters.convertFromDAGPlan(plr.getType()),
+        DagTypeConverters.convertFromDAGPlan(plr.getVisibility()),
+        plr.getSize(), plr.getTimeStamp(),
+        plr.hasPattern() ? plr.getPattern() : null);
   }
 
   public static TezCounters convertTezCountersFromProto(TezCountersProto proto) {
@@ -715,6 +733,134 @@ public class DagTypeConverters {
       return null;
     }
     return payload.getPayload();
+  }
+
+  public static VertexExecutionContextProto convertToProto(
+      VertexExecutionContext context) {
+    if (context == null) {
+      return null;
+    } else {
+      VertexExecutionContextProto.Builder builder =
+          VertexExecutionContextProto.newBuilder();
+      builder.setExecuteInAm(context.shouldExecuteInAm());
+      builder.setExecuteInContainers(context.shouldExecuteInContainers());
+      if (context.getTaskSchedulerName() != null) {
+        builder.setTaskSchedulerName(context.getTaskSchedulerName());
+      }
+      if (context.getContainerLauncherName() != null) {
+        builder.setContainerLauncherName(context.getContainerLauncherName());
+      }
+      if (context.getTaskCommName() != null) {
+        builder.setTaskCommName(context.getTaskCommName());
+      }
+      return builder.build();
+    }
+  }
+
+  public static VertexExecutionContext convertFromProto(
+      VertexExecutionContextProto proto) {
+    if (proto == null) {
+      return null;
+    } else {
+      if (proto.getExecuteInAm()) {
+        VertexExecutionContext context =
+            VertexExecutionContext.createExecuteInAm(proto.getExecuteInAm());
+        return context;
+      } else if (proto.getExecuteInContainers()) {
+        VertexExecutionContext context =
+            VertexExecutionContext.createExecuteInContainers(proto.getExecuteInContainers());
+        return context;
+      } else {
+        String taskScheduler = proto.hasTaskSchedulerName() ? proto.getTaskSchedulerName() : null;
+        String containerLauncher =
+            proto.hasContainerLauncherName() ? proto.getContainerLauncherName() : null;
+        String taskComm = proto.hasTaskCommName() ? proto.getTaskCommName() : null;
+        VertexExecutionContext context =
+            VertexExecutionContext.create(taskScheduler, containerLauncher, taskComm);
+        return context;
+      }
+    }
+  }
+
+  public static List<TezNamedEntityDescriptorProto> convertNamedEntityCollectionToProto(
+      NamedEntityDescriptor[] namedEntityDescriptors) {
+    List<TezNamedEntityDescriptorProto> list =
+        Lists.newArrayListWithCapacity(namedEntityDescriptors.length);
+    for (NamedEntityDescriptor namedEntity : namedEntityDescriptors) {
+      TezNamedEntityDescriptorProto namedEntityProto = convertNamedEntityToProto(namedEntity);
+      list.add(namedEntityProto);
+    }
+    return list;
+  }
+
+  public static TezNamedEntityDescriptorProto convertNamedEntityToProto(
+      NamedEntityDescriptor namedEntityDescriptor) {
+    TezNamedEntityDescriptorProto.Builder builder = TezNamedEntityDescriptorProto.newBuilder();
+    builder.setName(namedEntityDescriptor.getEntityName());
+    DAGProtos.TezEntityDescriptorProto entityProto =
+        DagTypeConverters.convertToDAGPlan(namedEntityDescriptor);
+    builder.setEntityDescriptor(entityProto);
+    return builder.build();
+  }
+
+  public static AMPluginDescriptorProto convertServicePluginDescriptorToProto(
+      ServicePluginsDescriptor servicePluginsDescriptor) {
+    AMPluginDescriptorProto.Builder pluginDescriptorBuilder =
+        AMPluginDescriptorProto.newBuilder();
+    if (servicePluginsDescriptor != null) {
+
+      pluginDescriptorBuilder.setContainersEnabled(servicePluginsDescriptor.areContainersEnabled());
+      pluginDescriptorBuilder.setUberEnabled(servicePluginsDescriptor.isUberEnabled());
+
+      if (servicePluginsDescriptor.getTaskSchedulerDescriptors() != null &&
+          servicePluginsDescriptor.getTaskSchedulerDescriptors().length > 0) {
+        List<TezNamedEntityDescriptorProto> namedEntityProtos = DagTypeConverters.convertNamedEntityCollectionToProto(
+            servicePluginsDescriptor.getTaskSchedulerDescriptors());
+        pluginDescriptorBuilder.addAllTaskSchedulers(namedEntityProtos);
+      }
+
+      if (servicePluginsDescriptor.getContainerLauncherDescriptors() != null &&
+          servicePluginsDescriptor.getContainerLauncherDescriptors().length > 0) {
+        List<TezNamedEntityDescriptorProto> namedEntityProtos = DagTypeConverters.convertNamedEntityCollectionToProto(
+            servicePluginsDescriptor.getContainerLauncherDescriptors());
+        pluginDescriptorBuilder.addAllContainerLaunchers(namedEntityProtos);
+      }
+
+      if (servicePluginsDescriptor.getTaskCommunicatorDescriptors() != null &&
+          servicePluginsDescriptor.getTaskCommunicatorDescriptors().length > 0) {
+        List<TezNamedEntityDescriptorProto> namedEntityProtos = DagTypeConverters.convertNamedEntityCollectionToProto(
+            servicePluginsDescriptor.getTaskCommunicatorDescriptors());
+        pluginDescriptorBuilder.addAllTaskCommunicators(namedEntityProtos);
+      }
+
+    } else {
+      pluginDescriptorBuilder.setContainersEnabled(true).setUberEnabled(false);
+    }
+    return pluginDescriptorBuilder.build();
+  }
+
+  public static CallerContextProto convertCallerContextToProto(CallerContext callerContext) {
+    CallerContextProto.Builder callerContextBuilder = CallerContextProto.newBuilder();
+    callerContextBuilder.setContext(callerContext.getContext());
+    if (callerContext.getCallerId() != null) {
+      callerContextBuilder.setCallerId(callerContext.getCallerId());
+    }
+    if (callerContext.getCallerType() != null) {
+      callerContextBuilder.setCallerType(callerContext.getCallerType());
+    }
+    if (callerContext.getBlob() != null) {
+      callerContextBuilder.setBlob(callerContext.getBlob());
+    }
+    return callerContextBuilder.build();
+  }
+
+  public static CallerContext convertCallerContextFromProto(CallerContextProto proto) {
+    CallerContext callerContext = CallerContext.create(proto.getContext(),
+        (proto.hasBlob() ? proto.getBlob() : null));
+    if (proto.hasCallerType() && proto.hasCallerId()) {
+      callerContext.setCallerIdAndType(proto.getCallerId(), proto.getCallerType());
+    }
+    return callerContext;
   }
 
 }

@@ -37,8 +37,8 @@ import org.apache.tez.dag.api.OutputDescriptor;
 import org.apache.tez.dag.api.ProcessorDescriptor;
 import org.apache.tez.dag.api.RootInputLeafOutput;
 import org.apache.tez.dag.api.VertexLocationHint;
+import org.apache.tez.dag.api.VertexManagerPluginContext.ScheduleTaskRequest;
 import org.apache.tez.dag.api.TaskLocationHint;
-import org.apache.tez.dag.api.VertexManagerPluginContext.TaskWithLocationHint;
 import org.apache.tez.dag.api.client.StatusGetOpts;
 import org.apache.tez.dag.api.records.DAGProtos.RootInputLeafOutputProto;
 import org.apache.tez.dag.api.records.DAGProtos.VertexPlan;
@@ -49,7 +49,6 @@ import org.apache.tez.dag.app.TaskAttemptEventInfo;
 import org.apache.tez.dag.app.dag.event.SpeculatorEvent;
 import org.apache.tez.dag.app.dag.impl.AMUserCodeException;
 import org.apache.tez.dag.app.dag.impl.Edge;
-import org.apache.tez.dag.history.HistoryEvent;
 import org.apache.tez.dag.records.TezTaskAttemptID;
 import org.apache.tez.dag.records.TezTaskID;
 import org.apache.tez.dag.records.TezVertexID;
@@ -80,6 +79,13 @@ public interface Vertex extends Comparable<Vertex> {
    */
   TezCounters getAllCounters();
 
+  /**
+   * Get all the counters of this vertex.
+   * @return aggregate task-counters
+   */
+  TezCounters getCachedCounters();
+
+  int getMaxTaskConcurrency();
   Map<TezTaskID, Task> getTasks();
   Task getTask(TezTaskID taskID);
   Task getTask(int taskIndex);
@@ -89,6 +95,7 @@ public interface Vertex extends Comparable<Vertex> {
   int getSucceededTasks();
   int getRunningTasks();
   float getProgress();
+  float getCompletedTaskProgress();
   ProgressBuilder getVertexProgress();
   VertexStatusBuilder getVertexStatus(Set<StatusGetOpts> statusOptions);
 
@@ -107,6 +114,11 @@ public interface Vertex extends Comparable<Vertex> {
   public void reconfigureVertex(@Nullable Map<String, InputSpecUpdate> rootInputSpecUpdate,
       int parallelism,
       @Nullable VertexLocationHint locationHint) throws AMUserCodeException;
+  
+  public void reconfigureVertex(int parallelism,
+      @Nullable VertexLocationHint locationHint,
+      @Nullable Map<String, EdgeProperty> sourceEdgeProperties,
+      @Nullable Map<String, InputSpecUpdate> rootInputSpecUpdate) throws AMUserCodeException;
 
   void setVertexLocationHint(VertexLocationHint vertexLocationHint);
   void vertexReconfigurationPlanned();
@@ -142,7 +154,7 @@ public interface Vertex extends Comparable<Vertex> {
 
   int getInputVerticesCount();
   int getOutputVerticesCount();
-  void scheduleTasks(List<TaskWithLocationHint> tasks);
+  void scheduleTasks(List<ScheduleTaskRequest> tasks);
   void scheduleSpeculativeTask(TezTaskID taskId);
   Resource getTaskResource();
   
@@ -160,8 +172,6 @@ public interface Vertex extends Comparable<Vertex> {
   // internal apis
   AppContext getAppContext();
 
-  VertexState restoreFromEvent(HistoryEvent event);
-
   String getLogIdentifier();
 
   public void incrementFailedTaskAttemptCount();
@@ -173,4 +183,10 @@ public interface Vertex extends Comparable<Vertex> {
   public int getKilledTaskAttemptCount();
 
   public Configuration getConf();
+
+  public boolean isSpeculationEnabled();
+
+  public int getTaskSchedulerIdentifier();
+  public int getContainerLauncherIdentifier();
+  public int getTaskCommunicatorIdentifier();
 }

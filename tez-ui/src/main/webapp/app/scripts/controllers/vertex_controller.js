@@ -16,18 +16,52 @@
  * limitations under the License.
  */
 
-App.VertexController = Em.ObjectController.extend(App.Helpers.DisplayHelper, App.ModelRefreshMixin, {
+App.VertexController = App.PollingController.extend(App.Helpers.DisplayHelper, App.ModelRefreshMixin, {
   controllerName: 'VertexController',
 
   pageTitle: 'Vertex',
+  persistConfigs: false,
 
   loading: true,
+
+  pollingType: 'vertexInfo',
+
+  pollsterControl: function () {
+    if(this.get('dag.status') == 'RUNNING' &&
+        this.get('dag.amWebServiceVersion') != '1' &&
+        this.get('pollingEnabled') &&
+        this.get('isActive')) {
+      this.get('pollster').start();
+    }
+    else {
+      this.get('pollster').stop();
+    }
+  }.observes('dag.status', 'dag.amWebServiceVersion', 'isActive', 'pollingEnabled'),
+
+  pollsterOptionsObserver: function () {
+    var model = this.get('model');
+
+    this.get('pollster').setProperties( (model && model.get('status') != 'SUCCEEDED') ? {
+      targetRecords: [model],
+      options: {
+        appID: this.get('applicationId'),
+        dagID: App.Helpers.misc.getIndexFromId(this.get('dagID')),
+        vertexID: App.Helpers.misc.getIndexFromId(this.get('id'))
+      }
+    } : {
+      targetRecords: [],
+      options: null
+    });
+  }.observes('applicationId', 'status', 'dagID', 'id'),
 
   loadAdditional: function(vertex) {
     var loaders = [],
       that = this,
       applicationId = vertex.get('applicationId');
 
+    vertex.set('progress', undefined);
+
+    // Irrespective of am version this will get the progress first.
     if (vertex.get('status') == 'RUNNING') {
       var vertexIdx = vertex.get('id').split('_').splice(-1).pop();
       App.Helpers.misc.removeRecord(this.store, 'vertexProgress', vertexIdx);
@@ -39,19 +73,22 @@ App.VertexController = Em.ObjectController.extend(App.Helpers.DisplayHelper, App
           vertex.set('progress', vertexProgressInfo.get('progress'));
         }
       }).catch(function(error) {
-        Em.Logger.error("Failed to fetch vertexProgress" + error)
+        error.message = "Failed to fetch vertexProgress. Application Master (AM) is out of reach. Either it's down, or CORS is not enabled for YARN ResourceManager.";
+        Em.Logger.error(error);
+        var err = App.Helpers.misc.formatError(error);
+        var msg = 'Error code: %@, message: %@'.fmt(err.errCode, err.msg);
+        App.Helpers.ErrorBar.getInstance().show(msg, err.details);
       });
       loaders.push(progressLoader);
     }
 
-    App.Helpers.misc.removeRecord(that.store, 'appDetail', applicationId);
-    var appDetailFetcher = that.store.find('appDetail', applicationId).then(function(appDetail) {
-      var appState = appDetail.get('appState');
-      if (appState) {
-        vertex.set('yarnAppState', appState);
+    var appDetailFetcher = App.Helpers.misc.loadApp(that.store, applicationId).then(function(appDetail) {
+      var status = appDetail.get('status');
+      if (status) {
+        vertex.set('yarnAppState', status);
       }
-      vertex.set('status', App.Helpers.misc.getRealStatus(vertex.get('status'), appDetail.get('appState'),
-        appDetail.get('finalAppStatus')));
+      vertex.set('status', App.Helpers.misc.getRealStatus(vertex.get('status'), appDetail.get('status'),
+        appDetail.get('finalStatus')));
     }).catch(function(){});
     loaders.push(appDetailFetcher);
 

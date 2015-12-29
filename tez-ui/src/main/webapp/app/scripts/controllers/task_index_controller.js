@@ -17,7 +17,7 @@
  */
 
  //TODO: watch individual counters.
-App.TaskIndexController = Em.ObjectController.extend(App.ModelRefreshMixin, {
+App.TaskIndexController = App.PollingController.extend(App.ModelRefreshMixin, {
   controllerName: 'TaskIndexController',
 
   taskStatus: function() {
@@ -28,5 +28,16 @@ App.TaskIndexController = Em.ObjectController.extend(App.ModelRefreshMixin, {
     return App.Helpers.misc.getStatusClassForEntity(this.get('taskStatus'),
       this.get('hasFailedTaskAttempts'));
   }.property('id', 'taskStatus', 'hasFailedTaskAttempts'),
+
+  load: function () {
+    var model = this.get('content');
+    if(model && $.isFunction(model.reload)) {
+      model.reload().then(function(record) {
+        if(record.get('isDirty')) {
+          record.rollback();
+        }
+      });
+    }
+  },
 
 });

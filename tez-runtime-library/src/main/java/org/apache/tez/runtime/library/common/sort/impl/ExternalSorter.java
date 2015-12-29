@@ -26,6 +26,7 @@ import java.util.Map;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Maps;
+import org.apache.tez.runtime.api.OutputStatisticsReporter;
 import org.apache.tez.runtime.library.api.IOInterruptedException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -58,7 +59,6 @@ import org.apache.tez.runtime.library.common.combine.Combiner;
 import org.apache.tez.runtime.library.common.shuffle.orderedgrouped.ShuffleHeader;
 import org.apache.tez.runtime.library.common.sort.impl.IFile.Writer;
 import org.apache.tez.runtime.library.common.task.local.output.TezTaskOutput;
-import org.apache.tez.runtime.library.hadoop.compat.NullProgressable;
 
 import com.google.common.base.Preconditions;
 
@@ -70,6 +70,8 @@ public abstract class ExternalSorter {
   public void close() throws IOException {
     spillFileIndexPaths.clear();
     spillFilePaths.clear();
+    reportStatistics();
+    outputContext.notifyProgress();
   }
 
   public abstract void flush() throws IOException;
@@ -84,7 +86,13 @@ public abstract class ExternalSorter {
     }
   }
 
-  protected final Progressable nullProgressable = new NullProgressable();
+  protected final Progressable progressable = new Progressable() {
+    @Override
+    public void progress() {
+      outputContext.notifyProgress();
+    }
+  };
+
   protected final OutputContext outputContext;
   protected final Combiner combiner;
   protected final Partitioner partitioner;
@@ -119,6 +127,8 @@ public abstract class ExternalSorter {
 
   protected final boolean cleanup;
 
+  protected OutputStatisticsReporter statsReporter;
+  protected final long[] partitionStats;
   protected final boolean finalMergeEnabled;
   protected final boolean sendEmptyPartitionDetails;
 
@@ -155,13 +165,20 @@ public abstract class ExternalSorter {
     this.outputContext = outputContext;
     this.conf = conf;
     this.partitions = numOutputs;
+    boolean reportPartitionStats = conf.getBoolean(TezRuntimeConfiguration
+            .TEZ_RUNTIME_REPORT_PARTITION_STATS,
+        TezRuntimeConfiguration.TEZ_RUNTIME_REPORT_PARTITION_STATS_DEFAULT);
+    this.partitionStats = (reportPartitionStats) ? (new long[partitions]) : null;
 
     cleanup = conf.getBoolean(TezRuntimeConfiguration.TEZ_RUNTIME_CLEANUP_FILES_ON_INTERRUPT,
         TezRuntimeConfiguration.TEZ_RUNTIME_CLEANUP_FILES_ON_INTERRUPT_DEFAULT);
 
     rfs = ((LocalFileSystem)FileSystem.getLocal(this.conf)).getRaw();
 
-    LOG.info("Initial Mem : " + initialMemoryAvailable + ", assignedMb=" + ((initialMemoryAvailable >> 20)));
+    if (LOG.isDebugEnabled()) {
+      LOG.debug(outputContext.getDestinationVertexName() + ": Initial Mem bytes : " +
+          initialMemoryAvailable + ", in MB=" + ((initialMemoryAvailable >> 20)));
+    }
     int assignedMb = (int) (initialMemoryAvailable >> 20);
     //Let the overflow checks happen in appropriate sorter impls
     this.availableMemoryMb = assignedMb;
@@ -179,9 +196,13 @@ public abstract class ExternalSorter {
     serializationFactory = new SerializationFactory(this.conf);
     keySerializer = serializationFactory.getSerializer(keyClass);
     valSerializer = serializationFactory.getSerializer(valClass);
-    LOG.info("keySerializer=" + keySerializer + "; valueSerializer=" + valSerializer
-        + "; comparator=" + (RawComparator) ConfigUtils.getIntermediateOutputKeyComparator(conf)
-        + "; conf=" + conf.get(CommonConfigurationKeys.IO_SERIALIZATIONS_KEY));
+    LOG.info(outputContext.getDestinationVertexName() + " using: "
+        + "memoryMb=" + assignedMb
+        + ", keySerializerClass=" + keyClass
+        + ", valueSerializerClass=" + valSerializer
+        + ", comparator=" + (RawComparator) ConfigUtils.getIntermediateOutputKeyComparator(conf)
+        + ", partitioner=" + conf.get(TezRuntimeConfiguration.TEZ_RUNTIME_PARTITIONER_CLASS)
+        + ", serialization=" + conf.get(CommonConfigurationKeys.IO_SERIALIZATIONS_KEY));
 
     //    counters    
     mapOutputByteCounter = outputContext.getCounters().findCounter(TaskCounter.OUTPUT_BYTES);
@@ -236,11 +257,12 @@ public abstract class ExternalSorter {
     
     // Task outputs
     mapOutputFile = TezRuntimeUtils.instantiateTaskOutputManager(conf, outputContext);
-    
-    LOG.info("Instantiating Partitioner: [" + conf.get(TezRuntimeConfiguration.TEZ_RUNTIME_PARTITIONER_CLASS) + "]");
+
     this.conf.setInt(TezRuntimeFrameworkConfigs.TEZ_RUNTIME_NUM_EXPECTED_PARTITIONS, this.partitions);
     this.partitioner = TezRuntimeUtils.instantiatePartitioner(this.conf);
     this.combiner = TezRuntimeUtils.instantiateCombiner(this.conf, outputContext);
+
+    this.statsReporter = outputContext.getStatisticsReporter();
     this.finalMergeEnabled = conf.getBoolean(
         TezRuntimeConfiguration.TEZ_RUNTIME_ENABLE_FINAL_MERGE_IN_OUTPUT,
         TezRuntimeConfiguration.TEZ_RUNTIME_ENABLE_FINAL_MERGE_IN_OUTPUT_DEFAULT);
@@ -282,6 +304,7 @@ public abstract class ExternalSorter {
   protected void runCombineProcessor(TezRawKeyValueIterator kvIter,
       Writer writer) throws IOException {
     try {
+      outputContext.notifyProgress();
       combiner.combine(kvIter, writer);
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
@@ -329,9 +352,11 @@ public abstract class ExternalSorter {
         TezRuntimeConfiguration.TEZ_RUNTIME_IO_SORT_MB + " " + initialMemRequestMb + " should be "
             + "larger than 0 and should be less than the available task memory (MB):" +
             (maxAvailableTaskMemory >> 20));
-    LOG.info("Requested SortBufferSize ("
-        + TezRuntimeConfiguration.TEZ_RUNTIME_IO_SORT_MB + "): "
-        + initialMemRequestMb);
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("Requested SortBufferSize ("
+          + TezRuntimeConfiguration.TEZ_RUNTIME_IO_SORT_MB + "): "
+          + initialMemRequestMb);
+    }
     return reqBytes;
   }
 
@@ -369,5 +394,22 @@ public abstract class ExternalSorter {
     for(Map.Entry<Integer, Path> entry : spillMap.entrySet()) {
       cleanup(entry.getValue());
     }
+  }
+
+  public long[] getPartitionStats() {
+    return partitionStats;
+  }
+
+  protected boolean reportPartitionStats() {
+    return (partitionStats != null);
+  }
+
+  protected synchronized void reportStatistics() {
+    // This works for non-started outputs since new counters will be created with an initial value of 0
+    long outputSize = outputContext.getCounters().findCounter(TaskCounter.OUTPUT_BYTES).getValue();
+    statsReporter.reportDataSize(outputSize);
+    long outputRecords = outputContext.getCounters()
+        .findCounter(TaskCounter.OUTPUT_RECORDS).getValue();
+    statsReporter.reportItemsProcessed(outputRecords);
   }
 }

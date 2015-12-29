@@ -20,8 +20,6 @@ package org.apache.tez.mapreduce;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
 
 import java.io.File;
 import java.io.IOException;
@@ -90,6 +88,7 @@ import org.apache.tez.dag.api.OutputDescriptor;
 import org.apache.tez.dag.api.ProcessorDescriptor;
 import org.apache.tez.dag.api.TezConfiguration;
 import org.apache.tez.dag.api.TezException;
+import org.apache.tez.dag.api.TezReflectionException;
 import org.apache.tez.dag.api.TezUncheckedException;
 import org.apache.tez.dag.api.UserPayload;
 import org.apache.tez.dag.api.Vertex;
@@ -221,56 +220,6 @@ public class TestMRRJobsDAGApi {
     tezSession.stop();
   }
 
-  @Test(timeout = 100000)
-  public void testMultipleDAGsWithDuplicateName() throws TezException, IOException,
-      InterruptedException {
-    TezClient tezSession = null;
-    try {
-      TezConfiguration tezConf = new TezConfiguration(mrrTezCluster.getConfig());
-      Path remoteStagingDir = remoteFs.makeQualified(new Path("/tmp", String.valueOf(random
-          .nextInt(100000))));
-      remoteFs.mkdirs(remoteStagingDir);
-      tezConf.set(TezConfiguration.TEZ_AM_STAGING_DIR, remoteStagingDir.toString());
-      tezSession = TezClient.create("OrderedWordCountSession", tezConf, true);
-      tezSession.start();
-
-      SleepProcessorConfig spConf = new SleepProcessorConfig(1);
-      for (int dagIndex = 1; dagIndex <= 2; dagIndex++) {
-        DAG dag = DAG.create("TezSleepProcessor");
-        Vertex vertex = Vertex.create("SleepVertex", ProcessorDescriptor.create(
-                SleepProcessor.class.getName()).setUserPayload(spConf.toUserPayload()), 1,
-            Resource.newInstance(1024, 1));
-        dag.addVertex(vertex);
-
-        DAGClient dagClient = null;
-        try {
-          dagClient = tezSession.submitDAG(dag);
-          if (dagIndex > 1) {
-            fail("Should fail due to duplicate dag name for dagIndex: " + dagIndex);
-          }
-        } catch (TezException tex) {
-          if (dagIndex > 1) {
-            assertTrue(tex.getMessage().contains("Duplicate dag name "));
-            continue;
-          }
-          fail("DuplicateDAGName exception thrown for 1st DAG submission");
-        }
-        DAGStatus dagStatus = dagClient.getDAGStatus(null);
-        while (!dagStatus.isCompleted()) {
-          LOG.debug("Waiting for job to complete. Sleeping for 500ms." + " Current state: "
-              + dagStatus.getState());
-          Thread.sleep(500l);
-          dagStatus = dagClient.getDAGStatus(null);
-        }
-      }
-    } finally {
-      if (tezSession != null) {
-        tezSession.stop();
-      }
-    }
-  }
-  
-  
   @Test(timeout = 60000)
   public void testNonDefaultFSStagingDir() throws Exception {
     SleepProcessorConfig spConf = new SleepProcessorConfig(1);
@@ -887,7 +836,7 @@ public class TestMRRJobsDAGApi {
         LOG.info("Class found");
         FileSystem fs = FileSystem.get(conf);
         fs.mkdirs(new Path("/tmp/relocalizationfilefound"));
-      } catch (TezUncheckedException e) {
+      } catch (TezReflectionException e) {
         LOG.info("Class not found");
       }
 

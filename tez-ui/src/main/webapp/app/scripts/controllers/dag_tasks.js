@@ -17,7 +17,6 @@
  */
 
 App.DagTasksController = App.TablePageController.extend({
-
   controllerName: 'DagTasksController',
   needs: "dag",
 
@@ -26,6 +25,39 @@ App.DagTasksController = App.TablePageController.extend({
   filterEntityId: Ember.computed.alias('controllers.dag.id'),
 
   cacheDomain: Ember.computed.alias('controllers.dag.id'),
+
+  pollingType: 'taskInfo',
+
+  pollsterControl: function () {
+    if(this.get('status') == 'RUNNING' &&
+        this.get('amWebServiceVersion') != '1' &&
+        !this.get('loading') &&
+        this.get('isActive') &&
+        this.get('pollingEnabled') &&
+        this. get('rowsDisplayed.length') > 0) {
+      this.get('pollster').start();
+    }
+    else {
+      this.get('pollster').stop();
+    }
+  }.observes('status', 'amWebServiceVersion', 'rowsDisplayed', 'loading', 'isActive', 'pollingEnabled'),
+
+  pollsterOptionsObserver: function () {
+    this.set('pollster.options', {
+      appID: this.get('applicationId'),
+      dagID: this.get('idx'),
+      counters: this.get('countersDisplayed'),
+      taskID: this.get('rowsDisplayed').map(function (row) {
+          var taskIndex = App.Helpers.misc.getIndexFromId(row.get('id')),
+          vertexIndex = App.Helpers.misc.getIndexFromId(row.get('vertexID'));
+          return '%@_%@'.fmt(vertexIndex, taskIndex);
+        }).join(',')
+    });
+  }.observes('applicationId', 'idx', 'rowsDisplayed'),
+
+  countersDisplayed: function () {
+    return App.Helpers.misc.getCounterQueryParam(this.get('columns'));
+  }.property('columns'),
 
   beforeLoad: function () {
     var dagController = this.get('controllers.dag'),
@@ -94,10 +126,15 @@ App.DagTasksController = App.TablePageController.extend({
       {
         id: 'vertexName',
         headerCellName: 'Vertex Name',
+        templateName: 'components/basic-table/linked-cell',
         contentPath: 'vertexID',
         getCellContent: function(row) {
-          var vertexId = row.get('vertexID');
-          return vertexIdToNameMap[vertexId] || vertexId;
+          var vertexId = row.get('vertexID') || '';
+          return {
+            linkTo: 'vertex',
+            displayText: vertexIdToNameMap[vertexId] || vertexId,
+            entityId: vertexId
+          };
         },
         getSearchValue: function(row) {
           var vertexId = row.get('vertexID');
@@ -113,6 +150,8 @@ App.DagTasksController = App.TablePageController.extend({
         headerCellName: 'Status',
         templateName: 'components/basic-table/status-cell',
         contentPath: 'status',
+        observePath: true,
+        onSort: this.onInProgressColumnSort.bind(this),
         getCellContent: function(row) {
           var status = row.get('status');
           return {
@@ -121,6 +160,14 @@ App.DagTasksController = App.TablePageController.extend({
               row.get('hasFailedTaskAttempts'))
           };
         }
+      },
+      {
+        id: 'progress',
+        headerCellName: 'Progress',
+        contentPath: 'progress',
+        observePath: true,
+        onSort: this.onInProgressColumnSort.bind(this),
+        templateName: 'components/basic-table/progress-cell'
       },
       {
         id: 'startTime',
@@ -190,7 +237,7 @@ App.DagTasksController = App.TablePageController.extend({
           App.get('Configs.tables.entity.task') || [],
           App.get('Configs.tables.sharedColumns') || []
         )
-      )
+      , this)
     );
   }.property('defaultColumnConfigs'),
 

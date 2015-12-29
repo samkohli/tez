@@ -20,6 +20,7 @@ package org.apache.tez.history.parser.datamodel;
 
 import com.google.common.base.Preconditions;
 import com.google.common.base.Predicate;
+import com.google.common.base.Strings;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.LinkedHashMultimap;
 import com.google.common.collect.Lists;
@@ -27,6 +28,8 @@ import com.google.common.collect.Maps;
 import com.google.common.collect.Multimap;
 import com.google.common.collect.Multimaps;
 import com.google.common.collect.Ordering;
+
+import org.apache.hadoop.util.StringInterner;
 import org.apache.tez.dag.api.oldrecords.TaskAttemptState;
 import org.codehaus.jettison.json.JSONException;
 import org.codehaus.jettison.json.JSONObject;
@@ -63,39 +66,40 @@ public class TaskInfo extends BaseInfo {
         jsonObject.getString(Constants.ENTITY_TYPE).equalsIgnoreCase
             (Constants.TEZ_TASK_ID));
 
-    taskId = jsonObject.optString(Constants.ENTITY);
+    taskId = StringInterner.weakIntern(jsonObject.optString(Constants.ENTITY));
 
     //Parse additional Info
     final JSONObject otherInfoNode = jsonObject.getJSONObject(Constants.OTHER_INFO);
     startTime = otherInfoNode.optLong(Constants.START_TIME);
     endTime = otherInfoNode.optLong(Constants.FINISH_TIME);
     diagnostics = otherInfoNode.optString(Constants.DIAGNOSTICS);
-    successfulAttemptId = otherInfoNode.optString(Constants.SUCCESSFUL_ATTEMPT_ID);
+    successfulAttemptId = StringInterner.weakIntern(
+        otherInfoNode.optString(Constants.SUCCESSFUL_ATTEMPT_ID));
     scheduledTime = otherInfoNode.optLong(Constants.SCHEDULED_TIME);
-    status = otherInfoNode.optString(Constants.STATUS);
+    status = StringInterner.weakIntern(otherInfoNode.optString(Constants.STATUS));
   }
 
   @Override
-  public final long getStartTime() {
-    return startTime - (vertexInfo.getDagInfo().getAbsStartTime());
+  public final long getStartTimeInterval() {
+    return startTime - (vertexInfo.getDagInfo().getStartTime());
   }
 
-  public final long getAbsStartTime() {
+  public final long getStartTime() {
     return startTime;
   }
 
-  public final long getAbsFinishTime() {
+  public final long getFinishTime() {
     return endTime;
   }
 
   @Override
-  public final long getFinishTime() {
-    long taskFinishTime =  endTime - (vertexInfo.getDagInfo().getAbsStartTime());
+  public final long getFinishTimeInterval() {
+    long taskFinishTime =  endTime - (vertexInfo.getDagInfo().getStartTime());
     if (taskFinishTime < 0) {
       //probably vertex is not complete or failed in middle. get the last task attempt time
       for (TaskAttemptInfo attemptInfo : getTaskAttempts()) {
-        taskFinishTime = (attemptInfo.getFinishTime() > taskFinishTime)
-            ? attemptInfo.getFinishTime() : taskFinishTime;
+        taskFinishTime = (attemptInfo.getFinishTimeInterval() > taskFinishTime)
+            ? attemptInfo.getFinishTimeInterval() : taskFinishTime;
       }
     }
     return taskFinishTime;
@@ -173,7 +177,8 @@ public class TaskInfo extends BaseInfo {
   public final List<TaskAttemptInfo> getTaskAttempts(final TaskAttemptState state) {
     return Collections.unmodifiableList(Lists.newLinkedList(Iterables.filter(Lists.newLinkedList
                     (attemptInfoMap.values()), new Predicate<TaskAttemptInfo>() {
-                  @Override public boolean apply(TaskAttemptInfo input) {
+                  @Override
+                  public boolean apply(TaskAttemptInfo input) {
                     return input.getStatus() != null && input.getStatus().equals(state.toString());
                   }
                 }
@@ -201,6 +206,14 @@ public class TaskInfo extends BaseInfo {
    * @return TaskAttemptInfo
    */
   public final TaskAttemptInfo getSuccessfulTaskAttempt() {
+    if (!Strings.isNullOrEmpty(getSuccessfulAttemptId())) {
+      for (TaskAttemptInfo attemptInfo : getTaskAttempts()) {
+        if (attemptInfo.getTaskAttemptId().equals(getSuccessfulAttemptId())) {
+          return attemptInfo;
+        }
+      }
+    }
+    // fall back to checking status if successful attempt id is not available
     for (TaskAttemptInfo attemptInfo : getTaskAttempts()) {
       if (attemptInfo.getStatus().equalsIgnoreCase(TaskAttemptState.SUCCEEDED.toString())) {
         return attemptInfo;
@@ -222,8 +235,8 @@ public class TaskInfo extends BaseInfo {
 
     return Ordering.from(new Comparator<TaskAttemptInfo>() {
       @Override public int compare(TaskAttemptInfo o1, TaskAttemptInfo o2) {
-        return (o1.getFinishTime() < o2.getFinishTime()) ? -1 :
-            ((o1.getFinishTime() == o2.getFinishTime()) ?
+        return (o1.getFinishTimeInterval() < o2.getFinishTimeInterval()) ? -1 :
+            ((o1.getFinishTimeInterval() == o2.getFinishTimeInterval()) ?
                 0 : 1);
       }
     }).max(attemptsList);
@@ -259,8 +272,8 @@ public class TaskInfo extends BaseInfo {
   private Ordering<TaskAttemptInfo> orderingOnAttemptStartTime() {
     return Ordering.from(new Comparator<TaskAttemptInfo>() {
       @Override public int compare(TaskAttemptInfo o1, TaskAttemptInfo o2) {
-        return (o1.getStartTime() < o2.getStartTime()) ? -1 :
-            ((o1.getStartTime() == o2.getStartTime()) ? 0 : 1);
+        return (o1.getStartTimeInterval() < o2.getStartTimeInterval()) ? -1 :
+            ((o1.getStartTimeInterval() == o2.getStartTimeInterval()) ? 0 : 1);
       }
     });
   }
@@ -306,7 +319,7 @@ public class TaskInfo extends BaseInfo {
   }
 
   public final long getTimeTaken() {
-    return getFinishTime() - getStartTime();
+    return getFinishTimeInterval() - getStartTimeInterval();
   }
 
   public final String getSuccessfulAttemptId() {
@@ -318,7 +331,7 @@ public class TaskInfo extends BaseInfo {
   }
 
   public final long getScheduledTime() {
-    return scheduledTime - this.getVertexInfo().getDagInfo().getAbsStartTime();
+    return scheduledTime - this.getVertexInfo().getDagInfo().getStartTime();
   }
 
   @Override
@@ -327,8 +340,8 @@ public class TaskInfo extends BaseInfo {
     sb.append("[");
     sb.append("taskId=").append(getTaskId()).append(", ");
     sb.append("scheduledTime=").append(getAbsoluteScheduleTime()).append(", ");
-    sb.append("startTime=").append(getStartTime()).append(", ");
-    sb.append("finishTime=").append(getFinishTime()).append(", ");
+    sb.append("startTime=").append(getStartTimeInterval()).append(", ");
+    sb.append("finishTime=").append(getFinishTimeInterval()).append(", ");
     sb.append("timeTaken=").append(getTimeTaken()).append(", ");
     sb.append("events=").append(getEvents()).append(", ");
     sb.append("diagnostics=").append(getDiagnostics()).append(", ");

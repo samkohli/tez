@@ -48,7 +48,13 @@ $.extend(true, App.Configs, {
   restNamespace: {
     timeline: 'ws/v1/timeline',
     applicationHistory: 'ws/v1/applicationhistory',
-    aminfo: 'proxy/__app_id__/ws/v1/tez'
+    aminfo: 'proxy/__app_id__/ws/v1/tez',
+    aminfoV2: 'proxy/__app_id__/ws/v2/tez',
+    cluster: 'ws/v1/cluster'
+  },
+
+  otherNamespace: {
+    cluster: 'cluster',
   },
 
   tables: {

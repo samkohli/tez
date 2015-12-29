@@ -19,6 +19,7 @@
 package org.apache.tez.dag.app.rm;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
@@ -30,15 +31,19 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.PriorityBlockingQueue;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.apache.hadoop.yarn.api.records.ContainerState;
+import org.apache.tez.common.TezUtils;
+import org.apache.tez.serviceplugins.api.TaskScheduler;
+import org.apache.tez.serviceplugins.api.TaskSchedulerContext;
+import org.apache.tez.serviceplugins.api.TaskSchedulerContext.AMState;
+import org.apache.tez.serviceplugins.api.TaskSchedulerContext.AppFinalStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.apache.commons.lang.exception.ExceptionUtils;
 import org.apache.commons.math3.random.RandomDataGenerator;
 import org.apache.hadoop.classification.InterfaceAudience.Private;
 import org.apache.hadoop.conf.Configuration;
@@ -56,19 +61,16 @@ import org.apache.hadoop.yarn.client.api.async.AMRMClientAsync;
 import org.apache.hadoop.yarn.exceptions.YarnException;
 import org.apache.hadoop.yarn.util.RackResolver;
 import org.apache.hadoop.yarn.util.resource.Resources;
+import org.apache.tez.serviceplugins.api.TaskAttemptEndReason;
 import org.apache.tez.dag.api.TezConfiguration;
 import org.apache.tez.dag.api.TezUncheckedException;
-import org.apache.tez.dag.app.AppContext;
-import org.apache.tez.dag.app.DAGAppMasterState;
-import org.apache.tez.dag.app.rm.TaskSchedulerService.TaskSchedulerAppCallback.AppFinalStatus;
-import org.apache.tez.dag.app.rm.container.ContainerSignatureMatcher;
+import org.apache.tez.common.ContainerSignatureMatcher;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
-import com.google.common.util.concurrent.ThreadFactoryBuilder;
 
 /* TODO not yet updating cluster nodes on every allocate response
  * from RMContainerRequestor
@@ -79,25 +81,23 @@ import com.google.common.util.concurrent.ThreadFactoryBuilder;
       eventHandler.handle(new AMNodeEventNodeCountUpdated(clusterNmCount));
     }
  */
-public class YarnTaskSchedulerService extends TaskSchedulerService
+public class YarnTaskSchedulerService extends TaskScheduler
                              implements AMRMClientAsync.CallbackHandler {
   private static final Logger LOG = LoggerFactory.getLogger(YarnTaskSchedulerService.class);
 
 
 
   final TezAMRMClientAsync<CookieContainerRequest> amRmClient;
-  final TaskSchedulerAppCallback realAppClient;
-  final TaskSchedulerAppCallback appClientDelegate;
   final ContainerSignatureMatcher containerSignatureMatcher;
-  ExecutorService appCallbackExecutor;
 
   // Container Re-Use configuration
   private boolean shouldReuseContainers;
   private boolean reuseRackLocal;
   private boolean reuseNonLocal;
 
+  // type is linked hash map to maintain order of incoming requests
   Map<Object, CookieContainerRequest> taskRequests =
-                  new HashMap<Object, CookieContainerRequest>();
+                  new LinkedHashMap<Object, CookieContainerRequest>();
   // LinkedHashMap is need in getProgress()
   LinkedHashMap<Object, Container> taskAllocations =
                   new LinkedHashMap<Object, Container>();
@@ -130,10 +130,9 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
   final String appHostName;
   final int appHostPort;
   final String appTrackingUrl;
-  final AppContext appContext;
   private AtomicBoolean hasUnregistered = new AtomicBoolean(false);
 
-  AtomicBoolean isStopped = new AtomicBoolean(false);
+  AtomicBoolean isStopStarted = new AtomicBoolean(false);
 
   private ContainerAssigner NODE_LOCAL_ASSIGNER = new NodeLocalContainerAssigner();
   private ContainerAssigner RACK_LOCAL_ASSIGNER = new RackLocalContainerAssigner();
@@ -144,11 +143,16 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
   long idleContainerTimeoutMin;
   long idleContainerTimeoutMax = 0;
   int sessionNumMinHeldContainers = 0;
-  int preemptionPercentage = 0; 
+  int preemptionPercentage = 0;
+  long preemptionMaxWaitTime = 0;
+  
+  long highestWaitingRequestWaitStartTime = 0;
+  Priority highestWaitingRequestPriority = null;
   
   Set<ContainerId> sessionMinHeldContainers = Sets.newHashSet();
   
   RandomDataGenerator random = new RandomDataGenerator();
+  private final Configuration conf;
 
   @VisibleForTesting
   protected AtomicBoolean shouldUnregister = new AtomicBoolean(false);
@@ -212,51 +216,41 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
     }
   }
 
-  public YarnTaskSchedulerService(TaskSchedulerAppCallback appClient,
-                        ContainerSignatureMatcher containerSignatureMatcher,
-                        String appHostName,
-                        int appHostPort,
-                        String appTrackingUrl,
-                        AppContext appContext) {
-    super(YarnTaskSchedulerService.class.getName());
-    this.realAppClient = appClient;
-    this.appCallbackExecutor = createAppCallbackExecutorService();
-    this.containerSignatureMatcher = containerSignatureMatcher;
-    this.appClientDelegate = createAppCallbackDelegate(appClient);
+  public YarnTaskSchedulerService(TaskSchedulerContext taskSchedulerContext) {
+    super(taskSchedulerContext);
+    this.containerSignatureMatcher = taskSchedulerContext.getContainerSignatureMatcher();
     this.amRmClient = TezAMRMClientAsync.createAMRMClientAsync(1000, this);
-    this.appHostName = appHostName;
-    this.appHostPort = appHostPort;
-    this.appTrackingUrl = appTrackingUrl;
-    this.appContext = appContext;
+    this.appHostName = taskSchedulerContext.getAppHostName();
+    this.appHostPort = taskSchedulerContext.getAppClientPort();
+    this.appTrackingUrl = taskSchedulerContext.getAppTrackingUrl();
+    try {
+      this.conf = TezUtils.createConfFromUserPayload(taskSchedulerContext.getInitialUserPayload());
+    } catch (IOException e) {
+      throw new TezUncheckedException(
+          "Failed to deserialize payload for " + YarnTaskSchedulerService.class.getSimpleName(),
+          e);
+    }
   }
 
   @Private
   @VisibleForTesting
-  YarnTaskSchedulerService(TaskSchedulerAppCallback appClient,
-      ContainerSignatureMatcher containerSignatureMatcher,
-      String appHostName,
-      int appHostPort,
-      String appTrackingUrl,
-      TezAMRMClientAsync<CookieContainerRequest> client,
-      AppContext appContext) {
-    super(YarnTaskSchedulerService.class.getName());
-    this.realAppClient = appClient;
-    this.appCallbackExecutor = createAppCallbackExecutorService();
-    this.containerSignatureMatcher = containerSignatureMatcher;
-    this.appClientDelegate = createAppCallbackDelegate(appClient);
+  YarnTaskSchedulerService(TaskSchedulerContext taskSchedulerContext,
+      TezAMRMClientAsync<CookieContainerRequest> client) {
+    super(taskSchedulerContext);
+    this.containerSignatureMatcher = taskSchedulerContext.getContainerSignatureMatcher();
     this.amRmClient = client;
-    this.appHostName = appHostName;
-    this.appHostPort = appHostPort;
-    this.appTrackingUrl = appTrackingUrl;
-    this.appContext = appContext;
+    this.appHostName = taskSchedulerContext.getAppHostName();
+    this.appHostPort = taskSchedulerContext.getAppClientPort();
+    this.appTrackingUrl = taskSchedulerContext.getAppTrackingUrl();
+    try {
+      this.conf = TezUtils.createConfFromUserPayload(taskSchedulerContext.getInitialUserPayload());
+    } catch (IOException e) {
+      throw new TezUncheckedException(
+          "Failed to deserialize payload for " + YarnTaskSchedulerService.class.getSimpleName(),
+          e);
+    }
   }
 
-  @VisibleForTesting
-  ExecutorService createAppCallbackExecutorService() {
-    return Executors.newSingleThreadExecutor(new ThreadFactoryBuilder()
-        .setNameFormat("TaskSchedulerAppCaller #%d").setDaemon(true).build());
-  }
-  
   @Override
   public Resource getAvailableResources() {
     return amRmClient.getAvailableResources();
@@ -266,12 +260,6 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
   public int getClusterNodeCount() {
     // this can potentially be cheaper after YARN-1722
     return amRmClient.getClusterNodeCount();
-  }
-
-  TaskSchedulerAppCallback createAppCallbackDelegate(
-      TaskSchedulerAppCallback realAppClient) {
-    return new TaskSchedulerAppCallbackWrapper(realAppClient,
-        appCallbackExecutor);
   }
 
   @Override
@@ -286,8 +274,9 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
 
   // AbstractService methods
   @Override
-  public synchronized void serviceInit(Configuration conf) {
+  public synchronized void initialize() {
 
+    // TODO Post TEZ-2003. Make all of these final fields.
     amRmClient.init(conf);
     int heartbeatIntervalMax = conf.getInt(
         TezConfiguration.TEZ_AM_RM_HEARTBEAT_INTERVAL_MS_MAX,
@@ -344,15 +333,20 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
         TezConfiguration.TEZ_AM_PREEMPTION_HEARTBEATS_BETWEEN_PREEMPTIONS_DEFAULT);
     Preconditions.checkArgument(numHeartbeatsBetweenPreemptions >= 1, 
         "Heartbeats between preemptions should be >=1");
+    
+    preemptionMaxWaitTime = conf.getInt(TezConfiguration.TEZ_AM_PREEMPTION_MAX_WAIT_TIME_MS, 
+        TezConfiguration.TEZ_AM_PREEMPTION_MAX_WAIT_TIME_MS_DEFAULT);
+    Preconditions.checkArgument(preemptionMaxWaitTime >=0, "Preemption max wait time must be >=0");
 
     delayedContainerManager = new DelayedContainerManager();
-    LOG.info("TaskScheduler initialized with configuration: " +
+    LOG.info("YarnTaskScheduler initialized with configuration: " +
             "maxRMHeartbeatInterval: " + heartbeatIntervalMax +
             ", containerReuseEnabled: " + shouldReuseContainers +
             ", reuseRackLocal: " + reuseRackLocal +
             ", reuseNonLocal: " + reuseNonLocal + 
             ", localitySchedulingDelay: " + localitySchedulingDelay +
             ", preemptionPercentage: " + preemptionPercentage +
+            ", preemptionMaxWaitTime: " + preemptionMaxWaitTime +
             ", numHeartbeatsBetweenPreemptions: " + numHeartbeatsBetweenPreemptions +
             ", idleContainerMinTimeout: " + idleContainerTimeoutMin +
             ", idleContainerMaxTimeout: " + idleContainerTimeoutMax +
@@ -360,7 +354,7 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
   }
 
   @Override
-  public void serviceStart() {
+  public void start() {
     try {
       RegisterApplicationMasterResponse response;
       synchronized (this) {
@@ -370,7 +364,7 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
                                                         appTrackingUrl);
       }
       // upcall to app outside locks
-      appClientDelegate.setApplicationRegistrationData(
+      getContext().setApplicationRegistrationData(
           response.getMaximumResourceCapability(),
           response.getApplicationACLs(),
           response.getClientToAMTokenMasterKey());
@@ -386,16 +380,15 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
   }
 
   @Override
-  public void serviceStop() throws InterruptedException {
+  public void shutdown() throws InterruptedException {
     // upcall to app outside of locks
     try {
       delayedContainerManager.shutdown();
       // Wait for contianers to be released.
       delayedContainerManager.join(2000l);
       synchronized (this) {
-        isStopped.set(true);
         if (shouldUnregister.get()) {
-          AppFinalStatus status = appClientDelegate.getFinalAppStatus();
+          AppFinalStatus status = getContext().getFinalAppStatus();
           LOG.info("Unregistering application from RM"
               + ", exitStatus=" + status.exitStatus
               + ", exitMessage=" + status.exitMessage
@@ -412,8 +405,6 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
       // operation and at the same time the callback operation might be trying
       // to get our lock.
       amRmClient.stop();
-      appCallbackExecutor.shutdown();
-      appCallbackExecutor.awaitTermination(1000l, TimeUnit.MILLISECONDS);
     } catch (YarnException e) {
       LOG.error("Yarn Exception while unregistering ", e);
       throw new TezUncheckedException(e);
@@ -426,7 +417,13 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
   // AMRMClientAsync interface methods
   @Override
   public void onContainersCompleted(List<ContainerStatus> statuses) {
-    if (isStopped.get()) {
+    if (isStopStarted.get()) {
+      if (LOG.isDebugEnabled()) {
+        for (ContainerStatus status : statuses) {
+          LOG.debug("Container " + status.getContainerId() + " is completed with ContainerStatus=" +
+              status);
+        }
+      }
       return;
     }
     Map<Object, ContainerStatus> appContainerStatus =
@@ -446,8 +443,10 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
           // being released
           // completion of a container we had released earlier
           // an allocated container completed. notify app
-          LOG.info("Released container completed:" + completedId +
-                   " last allocated to task: " + task);
+          if (LOG.isDebugEnabled()) {
+            LOG.debug("Released container completed:" + completedId +
+                " last allocated to task: " + task);
+          }
           appContainerStatus.put(task, containerStatus);
           continue;
         }
@@ -463,9 +462,9 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
         }
         if(task != null) {
           // completion of a container we have allocated currently
-          // an allocated container completed. notify app
-          LOG.info("Allocated container completed:" + completedId +
-                   " last allocated to task: " + task);
+          // an allocated container completed. notify app. This will cause attempt to get killed
+          LOG.info(
+              "Allocated container completed:" + completedId + " last allocated to task: " + task);
           appContainerStatus.put(task, containerStatus);
           continue;
         }
@@ -477,13 +476,21 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
 
     // upcall to app must be outside locks
     for (Entry<Object, ContainerStatus> entry : appContainerStatus.entrySet()) {
-      appClientDelegate.containerCompleted(entry.getKey(), entry.getValue());
+      getContext().containerCompleted(entry.getKey(), entry.getValue());
     }
   }
 
   @Override
   public void onContainersAllocated(List<Container> containers) {
-    if (isStopped.get()) {
+    if (isStopStarted.get()) {
+      LOG.info("Ignoring container allocations because application is shutting down. Num " + 
+          containers.size());
+      if (LOG.isDebugEnabled()) {
+        for (Container container : containers) {
+          LOG.debug("Release container:" + container.getId() + ", because App is shutting down.");
+          releaseContainer(container.getId());
+        }
+      }
       return;
     }
     Map<CookieContainerRequest, Container> assignedContainers;
@@ -527,7 +534,7 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
   private synchronized Map<CookieContainerRequest, Container>
       assignNewlyAllocatedContainers(Iterable<Container> containers) {
 
-    boolean amInCompletionState = appContext.isAMInCompletionState();
+    boolean amInCompletionState = (getContext().getAMState() == AMState.COMPLETED);
     Map<CookieContainerRequest, Container> assignedContainers =
         new HashMap<CookieContainerRequest, Container>();
 
@@ -541,6 +548,9 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
     }
 
     // Release any unassigned containers given by the RM
+    if (containers.iterator().hasNext()) {
+      LOG.info("Releasing newly assigned containers which could not be allocated");
+    }
     releaseUnassignedContainers(containers);
 
     return assignedContainers;
@@ -549,7 +559,7 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
   private synchronized Map<CookieContainerRequest, Container>
       tryAssignReUsedContainers(Iterable<Container> containers) {
 
-    boolean amInCompletionState = appContext.isAMInCompletionState();
+    boolean amInCompletionState = (getContext().getAMState() == AMState.COMPLETED);
     Map<CookieContainerRequest, Container> assignedContainers =
       new HashMap<CookieContainerRequest, Container>();
 
@@ -589,29 +599,29 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
   private synchronized Map<CookieContainerRequest, Container>
       assignDelayedContainer(HeldContainer heldContainer) {
 
-    DAGAppMasterState state = appContext.getAMState();
+    AMState state = getContext().getAMState();
 
     boolean isNew = heldContainer.isNew();
     if (LOG.isDebugEnabled()) {
       LOG.debug("Trying to assign a delayed container"
-        + ", containerId=" + heldContainer.getContainer().getId()
-        + ", nextScheduleTime=" + heldContainer.getNextScheduleTime()
-        + ", containerExpiryTime=" + heldContainer.getContainerExpiryTime()
-        + ", AMState=" + state
-        + ", matchLevel=" + heldContainer.getLocalityMatchLevel()
-        + ", taskRequestsCount=" + taskRequests.size()
-        + ", heldContainers=" + heldContainers.size()
-        + ", delayedContainers=" + delayedContainerManager.delayedContainers.size()
-        + ", isNew=" + isNew);
+          + ", containerId=" + heldContainer.getContainer().getId()
+          + ", nextScheduleTime=" + heldContainer.getNextScheduleTime()
+          + ", containerExpiryTime=" + heldContainer.getContainerExpiryTime()
+          + ", AMState=" + state
+          + ", matchLevel=" + heldContainer.getLocalityMatchLevel()
+          + ", taskRequestsCount=" + taskRequests.size()
+          + ", heldContainers=" + heldContainers.size()
+          + ", delayedContainers=" + delayedContainerManager.delayedContainers.size()
+          + ", isNew=" + isNew);
     }
 
-    if (state.equals(DAGAppMasterState.IDLE) || taskRequests.isEmpty()) {
+    if (state.equals(AMState.IDLE) || taskRequests.isEmpty()) {
       // reset locality level on held container
       // if sessionDelay defined, push back into delayed queue if not already
       // done so
 
       // Compute min held containers.
-      if (appContext.isSession() && sessionNumMinHeldContainers > 0 &&
+      if (getContext().isSession() && sessionNumMinHeldContainers > 0 &&
           sessionMinHeldContainers.isEmpty()) {
         // session mode and need to hold onto containers and not done so already
         determineMinHeldContainers();
@@ -625,7 +635,7 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
           && idleContainerTimeoutMin != -1)) {
         // container idle timeout has expired or is a new unused container. 
         // new container is possibly a spurious race condition allocation.
-        if (appContext.isSession()
+        if (getContext().isSession()
             && sessionMinHeldContainers.contains(heldContainer.getContainer().getId())) {
           // There are no outstanding requests. So its safe to hold new containers.
           // We may have received more containers than necessary and some are unused
@@ -650,7 +660,7 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
             + ", delayedContainers=" + delayedContainerManager.delayedContainers.size()
             + ", isNew=" + isNew);
           releaseUnassignedContainers(
-              Lists.newArrayList(heldContainer.getContainer()));        
+              Collections.singletonList((heldContainer.getContainer())));        
       } else {
         // no outstanding work and container idle timeout not expired
         if (LOG.isDebugEnabled()) {
@@ -666,7 +676,7 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
             heldContainer.getContainer(), currentTime
                 + localitySchedulingDelay);        
       }
-    } else if (state.equals(DAGAppMasterState.RUNNING)) {
+    } else if (state.equals(AMState.RUNNING_APP)) {
       // clear min held containers since we need to allocate to tasks
       if (!sessionMinHeldContainers.isEmpty()) {
         // update the expire time of min held containers so that they are
@@ -703,7 +713,7 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
         assignReUsedContainerWithLocation(containerToAssign,
             NODE_LOCAL_ASSIGNER, assignedContainers, true);
         if (LOG.isDebugEnabled() && assignedContainers.isEmpty()) {
-          LOG.info("Failed to assign tasks to delayed container using node"
+          LOG.debug("Failed to assign tasks to delayed container using node"
             + ", containerId=" + heldContainer.getContainer().getId());
         }
       }
@@ -719,7 +729,7 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
           assignReUsedContainerWithLocation(containerToAssign,
               RACK_LOCAL_ASSIGNER, assignedContainers, false);
           if (LOG.isDebugEnabled() && assignedContainers.isEmpty()) {
-            LOG.info("Failed to assign tasks to delayed container using rack"
+            LOG.debug("Failed to assign tasks to delayed container using rack"
               + ", containerId=" + heldContainer.getContainer().getId());
           }
         }
@@ -735,7 +745,7 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
          assignReUsedContainerWithLocation(containerToAssign,
               NON_LOCAL_ASSIGNER, assignedContainers, false);
           if (LOG.isDebugEnabled() && assignedContainers.isEmpty()) {
-            LOG.info("Failed to assign tasks to delayed container using non-local"
+            LOG.debug("Failed to assign tasks to delayed container using non-local"
                 + ", containerId=" + heldContainer.getContainer().getId());
           }
         }
@@ -757,10 +767,10 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
         if (!isNew && heldContainer.getContainerExpiryTime() <= currentTime
           && idleContainerTimeoutMin != -1) {
           LOG.info("Container's idle timeout expired. Releasing container"
-            + ", containerId=" + heldContainer.container.getId()
-            + ", containerExpiryTime="
-            + heldContainer.getContainerExpiryTime()
-            + ", idleTimeoutMin=" + idleContainerTimeoutMin);
+              + ", containerId=" + heldContainer.container.getId()
+              + ", containerExpiryTime="
+              + heldContainer.getContainerExpiryTime()
+              + ", idleTimeoutMin=" + idleContainerTimeoutMin);
           releaseUnassignedContainers(
             Lists.newArrayList(heldContainer.container));
         } else {
@@ -805,13 +815,13 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
             // Are there any pending requests at any priority?
             // release if there are tasks or this is not a session
             if (safeToRelease && 
-                (!taskRequests.isEmpty() || !appContext.isSession())) {
+                (!taskRequests.isEmpty() || !getContext().isSession())) {
               LOG.info("Releasing held container as either there are pending but "
-                + " unmatched requests or this is not a session"
-                + ", containerId=" + heldContainer.container.getId()
-                + ", pendingTasks=" + taskRequests.size()
-                + ", isSession=" + appContext.isSession()
-                + ". isNew=" + isNew);
+                  + " unmatched requests or this is not a session"
+                  + ", containerId=" + heldContainer.container.getId()
+                  + ", pendingTasks=" + taskRequests.size()
+                  + ", isSession=" + getContext().isSession()
+                  + ". isNew=" + isNew);
               releaseUnassignedContainers(
                 Lists.newArrayList(heldContainer.container));
             } else {
@@ -857,26 +867,26 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
 
   @Override
   public void onShutdownRequest() {
-    if (isStopped.get()) {
+    if (isStopStarted.get()) {
       return;
     }
     // upcall to app must be outside locks
-    appClientDelegate.appShutdownRequested();
+    getContext().appShutdownRequested();
   }
 
   @Override
   public void onNodesUpdated(List<NodeReport> updatedNodes) {
-    if (isStopped.get()) {
+    if (isStopStarted.get()) {
       return;
     }
     // ignore bad nodes for now
     // upcall to app must be outside locks
-    appClientDelegate.nodesUpdated(updatedNodes);
+    getContext().nodesUpdated(updatedNodes);
   }
 
   @Override
   public float getProgress() {
-    if (isStopped.get()) {
+    if (isStopStarted.get()) {
       return 1;
     }
 
@@ -886,22 +896,27 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
       // TODO this will not handle dynamic changes in resources
       totalResources = Resources.clone(getAvailableResources());
       LOG.info("App total resource memory: " + totalResources.getMemory() +
-               " cpu: " + totalResources.getVirtualCores() +
-               " taskAllocations: " + taskAllocations.size());
+          " cpu: " + totalResources.getVirtualCores() +
+          " taskAllocations: " + taskAllocations.size());
     }
 
-    numHeartbeats++;
-    preemptIfNeeded();
+    synchronized (this) {
+      numHeartbeats++;
+      if (preemptIfNeeded()) {
+        heartbeatAtLastPreemption = numHeartbeats;
+      }
+    }
 
-    return appClientDelegate.getProgress();
+    return getContext().getProgress();
   }
 
   @Override
   public void onError(Throwable t) {
-    if (isStopped.get()) {
+    if (isStopStarted.get()) {
+      LOG.error("Got TaskSchedulerError, " + ExceptionUtils.getStackTrace(t));
       return;
     }
-    appClientDelegate.onError(t);
+    getContext().onError(t);
   }
 
   @Override
@@ -985,9 +1000,9 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
     // See if any of the delayedContainers can be used for this task.
     delayedContainerManager.triggerScheduling(true);
     LOG.info("Allocation request for task: " + task +
-      " with request: " + request + 
-      " host: " + ((hosts!=null&&hosts.length>0)?hosts[0]:"null") +
-      " rack: " + ((racks!=null&&racks.length>0)?racks[0]:"null"));
+          " with request: " + request +
+          " host: " + ((hosts != null && hosts.length > 0) ? hosts[0] : "null") +
+          " rack: " + ((racks != null && racks.length > 0) ? racks[0] : "null"));
   }
 
   /**
@@ -995,10 +1010,14 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
    *          the task to de-allocate.
    * @param taskSucceeded
    *          specify whether the task succeeded or failed.
+   * @param endReason
+   *          reason for the task ending
    * @return true if a container is assigned to this task.
    */
   @Override
-  public boolean deallocateTask(Object task, boolean taskSucceeded) {
+  public boolean deallocateTask(Object task, boolean taskSucceeded,
+                                TaskAttemptEndReason endReason,
+                                String diagnostics) {
     Map<CookieContainerRequest, Container> assignedContainers = null;
 
     synchronized (this) {
@@ -1016,8 +1035,10 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
         LOG.info("Ignoring removal of unknown task: " + task);
         return false;
       } else {
-        LOG.info("Deallocated task: " + task + " from container: "
-            + container.getId());
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("Deallocated task: " + task + " from container: "
+              + container.getId());
+        }
 
         if (!taskSucceeded || !shouldReuseContainers) {
           if (LOG.isDebugEnabled()) {
@@ -1037,6 +1058,7 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
             }
             assignedContainers = assignDelayedContainer(heldContainer);
           } else {
+            // this is a non standard situation
             LOG.info("Skipping container after task deallocate as container is"
                 + " no longer running, containerId=" + container.getId());
           }
@@ -1055,13 +1077,42 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
   public synchronized Object deallocateContainer(ContainerId containerId) {
     Object task = unAssignContainer(containerId, true);
     if(task != null) {
+      // non-standard case for the app layer to deallocate container
       LOG.info("Deallocated container: " + containerId +
-        " from task: " + task);
+          " from task: " + task);
       return task;
     }
 
     LOG.info("Ignoring dealloction of unknown container: " + containerId);
     return null;
+  }
+
+  @Override
+  public synchronized void initiateStop() {
+    LOG.info("Initiating stop of YarnTaskScheduler");
+    // release held containers
+    LOG.info("Releasing held containers");
+    isStopStarted.set(true);
+    // Create a new list for containerIds to iterate, otherwise it would cause ConcurrentModificationException
+    // because method releaseContainer will change heldContainers.
+    List<ContainerId> heldContainerIds = new ArrayList<ContainerId>(heldContainers.size());
+    for (ContainerId containerId : heldContainers.keySet()) {
+      heldContainerIds.add(containerId);
+    }
+    for (ContainerId containerId : heldContainerIds) {
+      releaseContainer(containerId);
+    }
+
+    // remove taskRequest from AMRMClient to avoid allocating new containers in the next heartbeat
+    LOG.info("Removing all pending taskRequests");
+    // Create a new list for tasks to avoid ConcurrentModificationException
+    List<Object> tasks = new ArrayList<Object>(taskRequests.size());
+    for (Object task : taskRequests.keySet()) {
+      tasks.add(task);
+    }
+    for (Object task : tasks) {
+      removeTaskRequest(task);
+    }
   }
 
   boolean canFit(Resource arg0, Resource arg1) {
@@ -1080,20 +1131,38 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
     return (int) Math.ceil((original * percent)/100.f);
   }
   
-  void preemptIfNeeded() {
+  private String constructPreemptionPeriodicLog(Resource freeResource) {
+    return "Allocated: " + allocatedResources +
+      " Free: " + freeResource +
+      " pendingRequests: " + taskRequests.size() +
+      " delayedContainers: " + delayedContainerManager.delayedContainers.size() +
+      " heartbeats: " + numHeartbeats + 
+      " lastPreemptionHeartbeat: " + heartbeatAtLastPreemption +
+      ((highestWaitingRequestPriority != null) ? 
+      (" highestWaitingRequestWaitStartTime: " + highestWaitingRequestWaitStartTime +
+      " highestWaitingRequestPriority: " + highestWaitingRequestPriority.toString()) : "");
+  }
+  
+  private void resetHighestWaitingPriority(Priority newPri) {
+    highestWaitingRequestPriority = newPri;
+    highestWaitingRequestWaitStartTime = 0;
+  }
+  
+  boolean preemptIfNeeded() {
     if (preemptionPercentage == 0) {
       // turned off
-      return;
+      return true;
     }
     ContainerId[] preemptedContainers = null;
     int numPendingRequestsToService = 0;
     synchronized (this) {
       Resource freeResources = amRmClient.getAvailableResources();
       if (LOG.isDebugEnabled()) {
-        LOG.debug("Allocated resource memory: " + allocatedResources.getMemory() +
-          " cpu:" + allocatedResources.getVirtualCores() + 
-          " delayedContainers: " + delayedContainerManager.delayedContainers.size() +
-          " heartbeats: " + numHeartbeats + " lastPreemptionHeartbeat: " + heartbeatAtLastPreemption);
+        LOG.debug(constructPreemptionPeriodicLog(freeResources));
+      } else {
+        if (numHeartbeats % 50 == 1) {
+          LOG.info(constructPreemptionPeriodicLog(freeResources));
+        }
       }
       assert freeResources.getMemory() >= 0;
   
@@ -1114,16 +1183,71 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
       
       if (highestPriRequest == null) {
         // nothing pending
-        return;
+        resetHighestWaitingPriority(null);
+        return true;
       }
       
-      if(fitsIn(highestPriRequest.getCapability(), freeResources)) {
-        if (LOG.isDebugEnabled()) {
-          LOG.debug("Highest pri request: " + highestPriRequest + " fits in available resources "
-              + freeResources);
-        }
-        return;
+      // reset the wait time when waiting priority changes to prevent carry over of the value
+      if (highestWaitingRequestPriority == null ||
+          !highestPriRequest.getPriority().equals(highestWaitingRequestPriority)) {
+        resetHighestWaitingPriority(highestPriRequest.getPriority());
       }
+      
+      long currTime = System.currentTimeMillis();
+      if (highestWaitingRequestWaitStartTime == 0) {
+        highestWaitingRequestWaitStartTime = currTime;
+      }
+
+      boolean preemptionWaitDeadlineCrossed = 
+          (currTime - highestWaitingRequestWaitStartTime) > preemptionMaxWaitTime ? true : false;
+
+      if(!preemptionWaitDeadlineCrossed && 
+          fitsIn(highestPriRequest.getCapability(), freeResources)) {
+        if (LOG.isDebugEnabled()) {
+          LOG.debug(highestPriRequest + " fits in free resources");
+        } else {
+          if (numHeartbeats % 50 == 1) {
+            LOG.info(highestPriRequest + " fits in free resources");
+          }
+        }
+        return true;
+      }
+      
+      if (preemptionWaitDeadlineCrossed) {
+        // check if anything lower priority is running - priority inversion
+        // this check could have been done earlier but in the common case
+        // this would be unnecessary since there are usually requests pending
+        // in the normal case without priority inversion. So do this expensive
+        // iteration now
+        boolean lowerPriRunning = false;
+        for(Map.Entry<Object, Container> entry : taskAllocations.entrySet()) {
+          HeldContainer heldContainer = heldContainers.get(entry.getValue().getId());
+          CookieContainerRequest lastTaskInfo = heldContainer.getLastTaskInfo();
+          Priority taskPriority = lastTaskInfo.getPriority();
+          Object signature = lastTaskInfo.getCookie().getContainerSignature();
+          if(isHigherPriority(highestPriRequest.getPriority(), taskPriority)) {
+            // lower priority task is running
+            if (containerSignatureMatcher.isExactMatch(
+                highestPriRequest.getCookie().getContainerSignature(),
+                signature)) {
+              // exact match with different priorities
+              continue;
+            }
+            lowerPriRunning = true;
+            break;
+          }
+        }
+        if (!lowerPriRunning) {
+          // nothing lower priority running
+          // normal case of many pending request without priority inversion
+          resetHighestWaitingPriority(null);
+          return true;
+        }
+        LOG.info("Preemption deadline crossed at pri: " + highestPriRequest.getPriority()
+            + " numRequests: " + numHighestPriRequests + ". "
+            + constructPreemptionPeriodicLog(freeResources));
+      }
+      
       // highest priority request will not fit in existing free resources
       // free up some more
       // TODO this is subject to error wrt RM resource normalization
@@ -1132,7 +1256,8 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
           preemptionPercentage);
 
       if (numPendingRequestsToService < 1) {
-        return;
+        // nothing to preempt - reset preemption last heartbeat
+        return true;
       }
 
       if (LOG.isDebugEnabled()) {
@@ -1140,7 +1265,7 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
             + numHighestPriRequests + " pending requests at pri: "
             + highestPriRequest.getPriority());
       }
-      
+
       for (int i=0; i<numPendingRequestsToService; ++i) {
         // This request must have been considered for matching with all existing 
         // containers when request was made.
@@ -1153,7 +1278,7 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
               LOG.debug("Reused container exists. Wait for assignment loop to release it. "
                   + heldContainer.getContainer().getId());
             }
-            return;
+            return true;
           }
           if (heldContainer.geNumAssignmentAttempts() < 3) {
             // we havent tried to assign this container at node/rack/ANY
@@ -1161,7 +1286,7 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
               LOG.debug("Brand new container. Wait for assignment loop to match it. "
                   + heldContainer.getContainer().getId());
             }
-            return;
+            return true;
           }
           Container container = heldContainer.getContainer();
           if (lowestPriNewContainer == null ||
@@ -1188,7 +1313,7 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
             CookieContainerRequest request = entry.getValue();
             if (request.getPriority().equals(lowestPriNewContainer.getPriority())) {
               LOG.info("Resending request for task again: " + task);
-              deallocateTask(task, true);
+              deallocateTask(task, true, null, null);
               allocateTask(task, request.getCapability(), 
                   (request.getNodes() == null ? null : 
                     request.getNodes().toArray(new String[request.getNodes().size()])), 
@@ -1206,18 +1331,18 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
       }
       
       if (numPendingRequestsToService < 1) {
-        return;
+        return true;
       }
 
       // there are no reused or new containers to release. try to preempt running containers
       // this assert will be a no-op in production but can help identify 
       // invalid assumptions during testing
       assert delayedContainerManager.delayedContainers.isEmpty();
-      
-      if ((numHeartbeats - heartbeatAtLastPreemption) <= numHeartbeatsBetweenPreemptions) {
-        return;
+      if (!delayedContainerManager.delayedContainers.isEmpty()) {
+        LOG.warn("Expected delayed containers to be empty. "
+            + constructPreemptionPeriodicLog(freeResources));
       }
-        
+      
       Priority preemptedTaskPriority = null;
       int numEntriesAtPreemptedPriority = 0;
       for(Map.Entry<Object, Container> entry : taskAllocations.entrySet()) {
@@ -1253,7 +1378,12 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
         numPendingRequestsToService = Math.min(newNumPendingRequestsToService,
             numPendingRequestsToService);
         if (numPendingRequestsToService < 1) {
-          return;
+          return true;
+        }
+        // wait for enough heartbeats since this request became active for preemption
+        if ((numHeartbeats - heartbeatAtLastPreemption) < numHeartbeatsBetweenPreemptions) {
+          // stop incrementing lastpreemption heartbeat count
+          return false;
         }
         LOG.info("Trying to service " + numPendingRequestsToService + " out of total "
             + numHighestPriRequests + " pending requests at pri: "
@@ -1280,15 +1410,15 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
     
     // upcall outside locks
     if (preemptedContainers != null) {
-      heartbeatAtLastPreemption = numHeartbeats;
       for(int i=0; i<numPendingRequestsToService; ++i) {
         ContainerId cId = preemptedContainers[i];
         if (cId != null) {
           LOG.info("Preempting container: " + cId + " currently allocated to a task.");
-          appClientDelegate.preemptContainer(cId);
+          getContext().preemptContainer(cId);
         }
       }
     }
+    return true;
   }
 
   private boolean fitsIn(Resource toFit, Resource resource) {
@@ -1418,7 +1548,7 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
     Object assignedTask = containerAssignments.remove(containerId);
     if (assignedTask != null) {
       // A task was assigned to this container at some point. Inform the app.
-      appClientDelegate.containerBeingReleased(containerId);
+      getContext().containerBeingReleased(containerId);
     }
     HeldContainer delayedContainer = heldContainers.remove(containerId);
     if (delayedContainer != null) {
@@ -1614,15 +1744,16 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
 
   private void releaseUnassignedContainers(Iterable<Container> containers) {
     for (Container container : containers) {
-      LOG.info("Releasing unused container: "
-          + container.getId());
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Releasing unused container: " + container.getId());
+      }
       releaseContainer(container.getId());
     }
   }
 
   private void informAppAboutAssignment(CookieContainerRequest assigned,
       Container container) {
-    appClientDelegate.taskAllocated(getTask(assigned),
+    getContext().taskAllocated(getTask(assigned),
         assigned.getCookie().getAppCookie(), container);
   }
 
@@ -1684,19 +1815,17 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
       Object task = getTask(assigned);
       assert task != null;
 
-      LOG.info("Assigning container to task"
-        + ", container=" + container
+      LOG.info("Assigning container to task: "
+        + "containerId=" + container.getId()
         + ", task=" + task
-        + ", containerHost=" + container.getNodeId().getHost()
+        + ", containerHost=" + container.getNodeId()
+        + ", containerPriority= " + container.getPriority()
+        + ", containerResources=" + container.getResource()
         + ", localityMatchType=" + locality
         + ", matchedLocation=" + matchedLocation
         + ", honorLocalityFlags=" + honorLocalityFlags
-        + ", reusedContainer="
-        + containerAssignments.containsKey(container.getId())
-        + ", delayedContainers=" + delayedContainerManager.delayedContainers.size()
-        + ", containerResourceMemory=" + container.getResource().getMemory()
-        + ", containerResourceVCores="
-        + container.getResource().getVirtualCores());
+        + ", reusedContainer=" + containerAssignments.containsKey(container.getId())
+        + ", delayedContainers=" + delayedContainerManager.delayedContainers.size());
 
       assignContainer(task, container, assigned);
     }
@@ -1871,19 +2000,20 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
         long currentTs = System.currentTimeMillis();
         long nextScheduleTs = delayedContainer.getNextScheduleTime();
         if (currentTs >= nextScheduleTs) {
-          // Remove the container and try scheduling it.
-          // TEZ-587 what if container is released by RM after this
-          // in onContainerCompleted()
-          delayedContainer = delayedContainers.poll();
-          if (delayedContainer == null) {
-            continue;
-          }
           Map<CookieContainerRequest, Container> assignedContainers = null;
           synchronized(YarnTaskSchedulerService.this) {
+            // Remove the container and try scheduling it.
+            // TEZ-587 what if container is released by RM after this
+            // in onContainerCompleted()
+            delayedContainer = delayedContainers.poll();
+            if (delayedContainer == null) {
+              continue;
+            }
             if (null !=
                 heldContainers.get(delayedContainer.getContainer().getId())) {
               assignedContainers = assignDelayedContainer(delayedContainer);
             } else {
+              // non standard scenario
               LOG.info("Skipping delayed container as container is no longer"
                   + " running, containerId="
                   + delayedContainer.getContainer().getId());
@@ -1938,9 +2068,10 @@ public class YarnTaskSchedulerService extends TaskSchedulerService
           HeldContainer delayedContainer = iter.next();
           if (!heldContainers.containsKey(delayedContainer.getContainer().getId())) {
             // this container is no longer held by us
+            // non standard scenario
             LOG.info("AssignAll - Skipping delayed container as container is no longer"
-                + " running, containerId="
-                + delayedContainer.getContainer().getId());
+                  + " running, containerId="
+                  + delayedContainer.getContainer().getId());
             iter.remove();
           }
         }

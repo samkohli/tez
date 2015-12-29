@@ -16,38 +16,55 @@
  * limitations under the License.
  */
 
-App.DagController = Em.ObjectController.extend(App.Helpers.DisplayHelper, {
+App.DagController = App.PollingController.extend(App.Helpers.DisplayHelper, {
   controllerName: 'DagController',
   pageTitle: 'Dag',
+
   loading: true,
+
+  pollingType: 'dagInfo',
+  persistConfigs: false,
+
+  pollsterControl: function () {
+    if(this.get('status') == 'RUNNING' &&
+        this.get('amWebServiceVersion') != '1' &&
+        this.get('pollingEnabled') &&
+        this.get('isActive')) {
+      this.get('pollster').start();
+    }
+    else {
+      this.get('pollster').stop();
+    }
+  }.observes('status', 'amWebServiceVersion', 'isActive', 'pollingEnabled'),
+
+  pollsterOptionsObserver: function () {
+    var model = this.get('model');
+
+    this.get('pollster').setProperties( (model && model.get('status') != 'SUCCEEDED') ? {
+      targetRecords: [model],
+      options: {
+        appID: this.get('applicationId'),
+        dagID: App.Helpers.misc.getIndexFromId(this.get('id')),
+      }
+    } : {
+      targetRecords: [],
+      options: null
+    });
+  }.observes('applicationId', 'model', 'model.status', 'id'),
 
   loadAdditional: function(dag) {
     var that = this;
     var loaders = [];
     var applicationId = dag.get('applicationId');
 
-    if (dag.get('status') === 'RUNNING') {
-      // update the progress info if available. this need not block the UI
-      App.Helpers.misc.removeRecord(this.store, 'dagProgress', dag.get('id'));
-      var aminfoLoader = that.store.find('dagProgress', dag.get('id'), {
-        appId: applicationId,
-        dagIdx: dag.get('idx')
-      }).then(function(dagProgressInfo) {
-        dag.set('progress', dagProgressInfo.get('progress'));
-      }).catch(function (error) {
-        Em.Logger.error("Failed to fetch dagProgress")
-      });
-      loaders.push(aminfoLoader);
-    }
-    App.Helpers.misc.removeRecord(this.store, 'appDetail', applicationId);
-    var appDetailLoader = this.store.find('appDetail', applicationId)
+    var appDetailLoader = App.Helpers.misc.loadApp(this.store, applicationId)
       .then(function(app){
         dag.set('appDetail', app);
-        var appState = app.get('appState');
-        if (appState) {
-          dag.set('yarnAppState', appState);
+        var status = app.get('status');
+        if (status) {
+          dag.set('yarnAppState', status);
         }
-        dag.set('status', App.Helpers.misc.getRealStatus(dag.get('status'), app.get('appState'), app.get('finalAppStatus')));
+        dag.set('status', App.Helpers.misc.getRealStatus(dag.get('status'), app.get('status'), app.get('finalStatus')));
       }).catch(function(){});
     App.Helpers.misc.removeRecord(this.store, 'tezApp', 'tez_' + applicationId);
     var tezAppLoader = this.store.find('tezApp', 'tez_' + applicationId)
@@ -79,12 +96,43 @@ App.DagController = Em.ObjectController.extend(App.Helpers.DisplayHelper, {
       }
     }
 
-    return Em.RSVP.all(loaders);
+    var allLoaders = Em.RSVP.all(loaders);
+    allLoaders.then(function(){
+      if (dag.get('status') === 'RUNNING') {
+        // update the progress info if available. this need not block the UI
+        if (dag.get('amWebServiceVersion') == '1' || !that.get('pollingEnabled')) {
+          that.updateInfoFromAM(dag);
+        }
+      }
+      else if(dag.get('status') == 'SUCCEEDED') {
+        dag.set('progress', 1);
+      }
+    });
+
+    return allLoaders;
+  },
+
+  // called only for v1 version of am api.
+  updateInfoFromAM: function(dag) {
+    var that = this;
+    App.Helpers.misc.removeRecord(this.get('store'), 'dagProgress', dag.get('id'));
+    var aminfoLoader = this.store.find('dagProgress', dag.get('id'), {
+      appId: dag.get('applicationId'),
+      dagIdx: dag.get('idx')
+    }).then(function(dagProgressInfo) {
+      that.set('progress', dagProgressInfo.get('progress'));
+    }).catch(function (error) {
+      error.message = "Failed to fetch dagProgress. Application Master (AM) is out of reach. Either it's down, or CORS is not enabled for YARN ResourceManager.";
+      Em.Logger.error(error);
+      var err = App.Helpers.misc.formatError(error);
+      var msg = 'Error code: %@, message: %@'.fmt(err.errCode, err.msg);
+      App.Helpers.ErrorBar.getInstance().show(msg, err.details);
+    });
   },
 
   enableAppIdLink: function() {
-    return !!(this.get('tezApp') && this.get('appDetail'));
-  }.property('applicationId', 'appDetail', 'tezApp'),
+    return !!this.get('tezApp');
+  }.property('applicationId', 'tezApp'),
 
   childDisplayViews: [
     Ember.Object.create({title: 'DAG Details', linkTo: 'dag.index'}),

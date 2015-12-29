@@ -94,6 +94,7 @@ public class TezProcessorContextImpl extends TezTaskContextImpl implements Proce
   @Override
   public void setProgress(float progress) {
     runtimeTask.setProgress(progress);
+    notifyProgress();
   }
 
   @Override
@@ -121,7 +122,9 @@ public class TezProcessorContextImpl extends TezTaskContextImpl implements Proce
     super.close();
     this.userPayload = null;
     this.inputReadyTracker = null;
-    LOG.info("Cleared TezProcessorContextImpl related information");
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("Cleared TezProcessorContextImpl related information");
+    }
   }
 
 }

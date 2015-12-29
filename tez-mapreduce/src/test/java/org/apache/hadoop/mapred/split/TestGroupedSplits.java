@@ -32,6 +32,8 @@ import java.util.List;
 import java.util.Random;
 import java.util.Set;
 
+import org.apache.hadoop.conf.Configuration;
+import org.apache.tez.mapreduce.grouper.TezSplitGrouper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.hadoop.fs.FileSystem;
@@ -47,8 +49,6 @@ import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapred.RecordReader;
 import org.apache.hadoop.mapred.Reporter;
 import org.apache.hadoop.mapred.TextInputFormat;
-import org.apache.hadoop.mapred.split.SplitSizeEstimator;
-import org.apache.hadoop.mapreduce.split.TezMapReduceSplitsGrouper;
 import org.apache.hadoop.util.ReflectionUtils;
 import org.apache.tez.common.MockDNSToSwitchMapping;
 import org.junit.Assert;
@@ -308,7 +308,7 @@ public class TestGroupedSplits {
     format.setConf(job);
     format.setInputFormat(mockWrappedFormat);
     
-    job = (JobConf) TezMapReduceSplitsGrouper.createConfigBuilder(job)
+    job = (JobConf) TezSplitGrouper.newConfigBuilder(job)
         .setGroupingSplitSize(50*1000*1000l, 500*1000*1000l)
         .build();
     InputSplit mockSplit1 = mock(InputSplit.class);
@@ -389,7 +389,7 @@ public class TestGroupedSplits {
     
     TezMapredSplitsGrouper grouper = new TezMapredSplitsGrouper();
     JobConf conf = new JobConf(defaultConf);
-    conf = (JobConf) TezMapReduceSplitsGrouper.createConfigBuilder(conf)
+    conf = (JobConf) TezSplitGrouper.newConfigBuilder(conf)
     .setGroupingSplitSize(splitLength*3, splitLength*3)
     .setGroupingRackSplitSizeReduction(1)
     .build();
@@ -446,7 +446,7 @@ public class TestGroupedSplits {
 
     TezMapredSplitsGrouper grouper = new TezMapredSplitsGrouper();
     JobConf conf = new JobConf(defaultConf);
-    conf = (JobConf) TezMapReduceSplitsGrouper.createConfigBuilder(conf)
+    conf = (JobConf) TezSplitGrouper.newConfigBuilder(conf)
     .setGroupingSplitSize(splitLength*3, splitLength*3)
     .setGroupingRackSplitSizeReduction(1)
     .build();
@@ -549,11 +549,71 @@ public class TestGroupedSplits {
   }
 
   @SuppressWarnings({ "rawtypes", "unchecked" })
+  // No grouping
+  @Test(timeout=10000)
+  public void testGroupedSplitWithBadLocations2() throws IOException {
+    JobConf job = new JobConf(defaultConf);
+    InputFormat mockWrappedFormat = mock(InputFormat.class);
+    TezGroupedSplitsInputFormat<LongWritable , Text> format =
+        new TezGroupedSplitsInputFormat<LongWritable, Text>();
+    format.setConf(job);
+    format.setInputFormat(mockWrappedFormat);
+
+    // put multiple splits with multiple copies in the same location
+    String validLocation = "validLocation";
+    String validLocation2 = "validLocation2";
+    int numSplits = 5;
+    InputSplit[] mockSplits = new InputSplit[numSplits];
+    InputSplit mockSplit1 = mock(InputSplit.class);
+    when(mockSplit1.getLength()).thenReturn(100*1000*1000l);
+    when(mockSplit1.getLocations()).thenReturn(null);
+    mockSplits[0] = mockSplit1;
+    InputSplit mockSplit2 = mock(InputSplit.class);
+    when(mockSplit2.getLength()).thenReturn(100*1000*1000l);
+    when(mockSplit2.getLocations()).thenReturn(new String[] {null});
+    mockSplits[1] = mockSplit2;
+    InputSplit mockSplit3 = mock(InputSplit.class);
+    when(mockSplit3.getLength()).thenReturn(100*1000*1000l);
+    when(mockSplit3.getLocations()).thenReturn(new String[] {null, null});
+    mockSplits[2] = mockSplit3;
+    InputSplit mockSplit4 = mock(InputSplit.class);
+    when(mockSplit4.getLength()).thenReturn(100*1000*1000l);
+    when(mockSplit4.getLocations()).thenReturn(new String[] {validLocation});
+    mockSplits[3] = mockSplit4;
+    InputSplit mockSplit5 = mock(InputSplit.class);
+    when(mockSplit5.getLength()).thenReturn(100*1000*1000l);
+    when(mockSplit5.getLocations()).thenReturn(new String[] {validLocation, null, validLocation2});
+    mockSplits[4] = mockSplit4;
+
+    when(mockWrappedFormat.getSplits((JobConf)anyObject(), anyInt())).thenReturn(mockSplits);
+
+    format.setDesiredNumberOfSplits(numSplits);
+    InputSplit[] splits = format.getSplits(job, 1);
+    Assert.assertEquals(numSplits, splits.length);
+    for (int i = 0 ; i < numSplits ; i++) {
+      TezGroupedSplit split = (TezGroupedSplit) splits[i];
+      // all 3 splits are present
+      Assert.assertEquals(1, split.wrappedSplits.size());
+      if (i==3) {
+        Assert.assertEquals(1, split.getLocations().length);
+        Assert.assertEquals(validLocation, split.getLocations()[0]);
+      } else if (i==4) {
+        Assert.assertEquals(1, split.getLocations().length);
+        Assert.assertTrue(split.getLocations()[0].equals(validLocation) || split.getLocations()[0].equals(validLocation2));
+      } else {
+        Assert.assertNull(split.getLocations());
+      }
+      ByteArrayOutputStream bOut = new ByteArrayOutputStream();
+      split.write(new DataOutputStream(bOut));
+    }
+  }
+
+  @SuppressWarnings({ "rawtypes", "unchecked" })
   @Test(timeout=10000)
   public void testGroupedSplitWithEstimator() throws IOException {
     JobConf job = new JobConf(defaultConf);
 
-    job = (JobConf) TezMapReduceSplitsGrouper.createConfigBuilder(job)
+    job = (JobConf) TezSplitGrouper.newConfigBuilder(job)
         .setGroupingSplitSize(12*1000*1000l, 25*1000*1000l)
         .build();
 
@@ -613,6 +673,91 @@ public class TestGroupedSplits {
         // split3
         Assert.assertEquals(split.getLength(), 2 * 1000 * 1000l + 1);
       }
+    }
+  }
+
+
+  // Splits get grouped
+  @Test (timeout = 10000)
+  public void testGroupingWithCustomLocations1() throws IOException {
+
+    int numSplits = 3;
+    InputSplit[] mockSplits = new InputSplit[numSplits];
+    InputSplit mockSplit1 = mock(InputSplit.class);
+    when(mockSplit1.getLength()).thenReturn(100*1000*1000l);
+    when(mockSplit1.getLocations()).thenReturn(new String[] {"location1", "location2"});
+    mockSplits[0] = mockSplit1;
+    InputSplit mockSplit2 = mock(InputSplit.class);
+    when(mockSplit2.getLength()).thenReturn(100*1000*1000l);
+    when(mockSplit2.getLocations()).thenReturn(new String[] {"location3", "location4"});
+    mockSplits[1] = mockSplit2;
+    InputSplit mockSplit3 = mock(InputSplit.class);
+    when(mockSplit3.getLength()).thenReturn(100*1000*1000l);
+    when(mockSplit3.getLocations()).thenReturn(new String[] {"location5", "location6"});
+    mockSplits[2] = mockSplit3;
+
+    SplitLocationProvider locationProvider = new SplitLocationProvider() {
+      @Override
+      public String[] getLocations(InputSplit split) throws IOException {
+        return new String[] {"customLocation"};
+      }
+    };
+
+    TezMapredSplitsGrouper splitsGrouper = new TezMapredSplitsGrouper();
+    InputSplit[] groupedSplits = splitsGrouper.getGroupedSplits(new Configuration(defaultConf), mockSplits, 1,
+        "MockInputForamt", null, locationProvider);
+
+    // Sanity. 1 group, with 3 splits.
+    Assert.assertEquals(1, groupedSplits.length);
+    Assert.assertTrue(groupedSplits[0] instanceof  TezGroupedSplit);
+    TezGroupedSplit groupedSplit = (TezGroupedSplit)groupedSplits[0];
+    Assert.assertEquals(3, groupedSplit.getGroupedSplits().size());
+
+    // Verify that the split ends up being grouped to the custom location.
+    Assert.assertEquals(1, groupedSplit.getLocations().length);
+    Assert.assertEquals("customLocation", groupedSplit.getLocations()[0]);
+  }
+
+  // Original splits returned.
+  @Test (timeout = 10000)
+  public void testGroupingWithCustomLocations2() throws IOException {
+
+    int numSplits = 3;
+    InputSplit[] mockSplits = new InputSplit[numSplits];
+    InputSplit mockSplit1 = mock(InputSplit.class);
+    when(mockSplit1.getLength()).thenReturn(100*1000*1000l);
+    when(mockSplit1.getLocations()).thenReturn(new String[] {"location1", "location2"});
+    mockSplits[0] = mockSplit1;
+    InputSplit mockSplit2 = mock(InputSplit.class);
+    when(mockSplit2.getLength()).thenReturn(100*1000*1000l);
+    when(mockSplit2.getLocations()).thenReturn(new String[] {"location3", "location4"});
+    mockSplits[1] = mockSplit2;
+    InputSplit mockSplit3 = mock(InputSplit.class);
+    when(mockSplit3.getLength()).thenReturn(100*1000*1000l);
+    when(mockSplit3.getLocations()).thenReturn(new String[] {"location5", "location6"});
+    mockSplits[2] = mockSplit3;
+
+    SplitLocationProvider locationProvider = new SplitLocationProvider() {
+      @Override
+      public String[] getLocations(InputSplit split) throws IOException {
+        return new String[] {"customLocation"};
+      }
+    };
+
+    TezMapredSplitsGrouper splitsGrouper = new TezMapredSplitsGrouper();
+    InputSplit[] groupedSplits = splitsGrouper.getGroupedSplits(new Configuration(defaultConf), mockSplits, 3,
+        "MockInputForamt", null, locationProvider);
+
+    // Sanity. 3 group, with 1 split each
+    Assert.assertEquals(3, groupedSplits.length);
+    for (int i = 0 ; i < 3 ; i++) {
+      Assert.assertTrue(groupedSplits[i] instanceof  TezGroupedSplit);
+      TezGroupedSplit groupedSplit = (TezGroupedSplit)groupedSplits[i];
+      Assert.assertEquals(1, groupedSplit.getGroupedSplits().size());
+
+      // Verify the splits have their final location set to customLocation
+      Assert.assertEquals(1, groupedSplit.getLocations().length);
+      Assert.assertEquals("customLocation", groupedSplit.getLocations()[0]);
     }
   }
 

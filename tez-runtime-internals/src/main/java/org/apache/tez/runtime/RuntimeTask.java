@@ -54,9 +54,10 @@ public abstract class RuntimeTask {
   private final AtomicBoolean taskDone;
   private final TaskCounterUpdater counterUpdater;
   private final TaskStatistics statistics;
+  private final AtomicBoolean progressNotified = new AtomicBoolean(false);
 
   protected RuntimeTask(TaskSpec taskSpec, Configuration tezConf,
-      TezUmbilical tezUmbilical, String pid) {
+      TezUmbilical tezUmbilical, String pid, boolean setupSysCounterUpdater) {
     this.taskSpec = taskSpec;
     this.tezConf = tezConf;
     this.tezUmbilical = tezUmbilical;
@@ -67,7 +68,11 @@ public abstract class RuntimeTask {
     this.progress = 0.0f;
     this.taskDone = new AtomicBoolean(false);
     this.statistics = new TaskStatistics();
-    this.counterUpdater = new TaskCounterUpdater(tezCounters, tezConf, pid);
+    if (setupSysCounterUpdater) {
+      this.counterUpdater = new TaskCounterUpdater(tezCounters, tezConf, pid);
+    } else {
+      this.counterUpdater = null;
+    }
   }
 
   protected enum State {
@@ -75,6 +80,10 @@ public abstract class RuntimeTask {
   }
 
   protected final AtomicReference<State> state = new AtomicReference<State>();
+
+  public boolean isRunning() {
+    return (state.get() == State.RUNNING);
+  }
 
   public TezCounters addAndGetTezCounter(String name) {
     TezCounters counter = new TezCounters();
@@ -94,6 +103,15 @@ public abstract class RuntimeTask {
     hasFatalError.set(true);
     this.fatalError.set(t);
     this.fatalErrorMessage = message;
+  }
+  
+  public final void notifyProgressInvocation() {
+    progressNotified.lazySet(true);
+  }
+  
+  public boolean getAndClearProgressNotification() {
+    boolean retVal = progressNotified.getAndSet(false);
+    return retVal;
   }
   
   public Throwable getFatalError() {
@@ -156,11 +174,14 @@ public abstract class RuntimeTask {
   }
   
   public void setFrameworkCounters() {
-    this.counterUpdater.updateCounters();
+    if (counterUpdater != null) {
+      this.counterUpdater.updateCounters();
+    }
   }
 
   protected void setTaskDone() {
     taskDone.set(true);
   }
 
+  public abstract void abortTask();
 }

@@ -42,7 +42,7 @@ import org.apache.tez.dag.history.events.TaskFinishedEvent;
 import org.apache.tez.dag.history.events.TaskStartedEvent;
 import org.apache.tez.dag.history.events.VertexFinishedEvent;
 import org.apache.tez.dag.history.events.VertexInitializedEvent;
-import org.apache.tez.dag.history.events.VertexParallelismUpdatedEvent;
+import org.apache.tez.dag.history.events.VertexConfigurationDoneEvent;
 import org.apache.tez.dag.history.events.VertexStartedEvent;
 import org.apache.tez.dag.history.logging.EntityTypes;
 import org.apache.tez.dag.history.utils.DAGUtils;
@@ -108,13 +108,12 @@ public class HistoryEventJsonConversion {
       case TASK_ATTEMPT_FINISHED:
         jsonObject = convertTaskAttemptFinishedEvent((TaskAttemptFinishedEvent) historyEvent);
         break;
-      case VERTEX_PARALLELISM_UPDATED:
-        jsonObject = convertVertexParallelismUpdatedEvent((VertexParallelismUpdatedEvent) historyEvent);
+      case VERTEX_CONFIGURE_DONE:
+        jsonObject = convertVertexReconfigureDoneEvent((VertexConfigurationDoneEvent) historyEvent);
         break;
       case DAG_RECOVERED:
         jsonObject = convertDAGRecoveredEvent((DAGRecoveredEvent) historyEvent);
         break;
-      case VERTEX_DATA_MOVEMENT_EVENTS_GENERATED:
       case VERTEX_COMMIT_STARTED:
       case VERTEX_GROUP_COMMIT_STARTED:
       case VERTEX_GROUP_COMMIT_FINISHED:
@@ -483,6 +482,15 @@ public class HistoryEventJsonConversion {
     JSONObject primaryFilters = new JSONObject();
     primaryFilters.put(ATSConstants.DAG_NAME,
         event.getDAGName());
+    if (event.getDAGPlan().hasCallerContext()
+        && event.getDAGPlan().getCallerContext().hasCallerId()
+        && event.getDAGPlan().getCallerContext().hasCallerType()) {
+      primaryFilters.put(ATSConstants.CALLER_CONTEXT_ID,
+          event.getDAGPlan().getCallerContext().getCallerId());
+      primaryFilters.put(ATSConstants.CALLER_CONTEXT_TYPE,
+          event.getDAGPlan().getCallerContext().getCallerType());
+    }
+
     jsonObject.put(ATSConstants.PRIMARY_FILTERS, primaryFilters);
 
     // TODO decide whether this goes into different events,
@@ -499,6 +507,14 @@ public class HistoryEventJsonConversion {
     JSONObject otherInfo = new JSONObject();
     otherInfo.put(ATSConstants.DAG_PLAN,
         DAGUtils.generateSimpleJSONPlan(event.getDAGPlan()));
+    if (event.getDAGPlan().hasCallerContext()
+        && event.getDAGPlan().getCallerContext().hasCallerId()
+        && event.getDAGPlan().getCallerContext().hasCallerType()) {
+      otherInfo.put(ATSConstants.CALLER_CONTEXT_ID,
+          event.getDAGPlan().getCallerContext().getCallerId());
+      otherInfo.put(ATSConstants.CALLER_CONTEXT_TYPE,
+          event.getDAGPlan().getCallerContext().getCallerType());
+    }
     jsonObject.put(ATSConstants.OTHER_INFO, otherInfo);
 
     return jsonObject;
@@ -520,9 +536,14 @@ public class HistoryEventJsonConversion {
     jsonObject.put(ATSConstants.EVENTS, events);
 
     JSONObject otherInfo = new JSONObject();
+    otherInfo.put(ATSConstants.CREATION_TIME, event.getCreationTime());
+    otherInfo.put(ATSConstants.ALLOCATION_TIME, event.getAllocationTime());
     otherInfo.put(ATSConstants.START_TIME, event.getStartTime());
     otherInfo.put(ATSConstants.FINISH_TIME, event.getFinishTime());
     otherInfo.put(ATSConstants.TIME_TAKEN, (event.getFinishTime() - event.getStartTime()));
+    if (event.getCreationCausalTA() != null) {
+      otherInfo.put(ATSConstants.CREATION_CAUSAL_ATTEMPT, event.getCreationCausalTA().toString());
+    }
     otherInfo.put(ATSConstants.STATUS, event.getState().name());
     if (event.getTaskAttemptError() != null) {
       otherInfo.put(ATSConstants.TASK_ATTEMPT_ERROR_ENUM, event.getTaskAttemptError().name());
@@ -530,6 +551,10 @@ public class HistoryEventJsonConversion {
     otherInfo.put(ATSConstants.DIAGNOSTICS, event.getDiagnostics());
     otherInfo.put(ATSConstants.COUNTERS,
         DAGUtils.convertCountersToJSON(event.getCounters()));
+    if (event.getDataEvents() != null && !event.getDataEvents().isEmpty()) {
+      otherInfo.put(ATSConstants.LAST_DATA_EVENTS, 
+          DAGUtils.convertDataEventDependencyInfoToJSON(event.getDataEvents()));
+    }
     jsonObject.put(ATSConstants.OTHER_INFO, otherInfo);
 
     return jsonObject;
@@ -636,7 +661,6 @@ public class HistoryEventJsonConversion {
     JSONObject otherInfo = new JSONObject();
     otherInfo.put(ATSConstants.START_TIME, event.getStartTime());
     otherInfo.put(ATSConstants.SCHEDULED_TIME, event.getScheduledTime());
-
     jsonObject.put(ATSConstants.OTHER_INFO, otherInfo);
 
     return jsonObject;
@@ -676,6 +700,41 @@ public class HistoryEventJsonConversion {
 
     jsonObject.put(ATSConstants.OTHER_INFO, otherInfo);
 
+    return jsonObject;
+  }
+
+  private static JSONObject convertVertexReconfigureDoneEvent(VertexConfigurationDoneEvent event) throws JSONException {
+    JSONObject jsonObject = new JSONObject();
+    jsonObject.put(ATSConstants.ENTITY, event.getVertexID().toString());
+    jsonObject.put(ATSConstants.ENTITY_TYPE, EntityTypes.TEZ_VERTEX_ID.name());
+
+    // Events
+    JSONArray events = new JSONArray();
+    JSONObject updateEvent = new JSONObject();
+    updateEvent.put(ATSConstants.TIMESTAMP, event.getReconfigureDoneTime());
+    updateEvent.put(ATSConstants.EVENT_TYPE,
+        HistoryEventType.VERTEX_CONFIGURE_DONE.name());
+
+    JSONObject eventInfo = new JSONObject();
+    eventInfo.put(ATSConstants.NUM_TASKS, event.getNumTasks());
+    if (event.getSourceEdgeProperties() != null && !event.getSourceEdgeProperties().isEmpty()) {
+      JSONObject updatedEdgeManagers = new JSONObject();
+      for (Entry<String, EdgeProperty> entry :
+          event.getSourceEdgeProperties().entrySet()) {
+        updatedEdgeManagers.put(entry.getKey(),
+            new JSONObject(DAGUtils.convertEdgeProperty(entry.getValue())));
+      }
+      eventInfo.put(ATSConstants.UPDATED_EDGE_MANAGERS, updatedEdgeManagers);
+    }
+    updateEvent.put(ATSConstants.EVENT_INFO, eventInfo);
+    events.put(updateEvent);
+    jsonObject.put(ATSConstants.EVENTS, events);
+
+    // Other info
+    JSONObject otherInfo = new JSONObject();
+    jsonObject.put(ATSConstants.OTHER_INFO, otherInfo);
+
+    // TODO add more on all other updated information
     return jsonObject;
   }
 
@@ -744,44 +803,6 @@ public class HistoryEventJsonConversion {
     otherInfo.put(ATSConstants.START_TIME, event.getStartTime());
     jsonObject.put(ATSConstants.OTHER_INFO, otherInfo);
 
-    return jsonObject;
-  }
-
-  private static JSONObject convertVertexParallelismUpdatedEvent(
-      VertexParallelismUpdatedEvent event) throws JSONException {
-    JSONObject jsonObject = new JSONObject();
-    jsonObject.put(ATSConstants.ENTITY, event.getVertexID().toString());
-    jsonObject.put(ATSConstants.ENTITY_TYPE, EntityTypes.TEZ_VERTEX_ID.name());
-
-    // Events
-    JSONArray events = new JSONArray();
-    JSONObject updateEvent = new JSONObject();
-    updateEvent.put(ATSConstants.TIMESTAMP, event.getUpdateTime());
-    updateEvent.put(ATSConstants.EVENT_TYPE,
-        HistoryEventType.VERTEX_PARALLELISM_UPDATED.name());
-
-    JSONObject eventInfo = new JSONObject();
-    eventInfo.put(ATSConstants.OLD_NUM_TASKS, event.getOldNumTasks());
-    eventInfo.put(ATSConstants.NUM_TASKS, event.getNumTasks());
-    if (event.getSourceEdgeProperties() != null && !event.getSourceEdgeProperties().isEmpty()) {
-      JSONObject updatedEdgeManagers = new JSONObject();
-      for (Entry<String, EdgeProperty> entry :
-          event.getSourceEdgeProperties().entrySet()) {
-        updatedEdgeManagers.put(entry.getKey(),
-            new JSONObject(DAGUtils.convertEdgeProperty(entry.getValue())));
-      }
-      eventInfo.put(ATSConstants.UPDATED_EDGE_MANAGERS, updatedEdgeManagers);
-    }
-    updateEvent.put(ATSConstants.EVENT_INFO, eventInfo);
-    events.put(updateEvent);
-    jsonObject.put(ATSConstants.EVENTS, events);
-
-    // Other info
-    JSONObject otherInfo = new JSONObject();
-    otherInfo.put(ATSConstants.NUM_TASKS, event.getNumTasks());
-    jsonObject.put(ATSConstants.OTHER_INFO, otherInfo);
-
-    // TODO add more on all other updated information
     return jsonObject;
   }
 

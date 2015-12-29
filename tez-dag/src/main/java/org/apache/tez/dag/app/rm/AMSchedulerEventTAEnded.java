@@ -18,6 +18,7 @@
 package org.apache.tez.dag.app.rm;
 
 import org.apache.hadoop.yarn.api.records.ContainerId;
+import org.apache.tez.serviceplugins.api.TaskAttemptEndReason;
 import org.apache.tez.dag.api.oldrecords.TaskAttemptState;
 import org.apache.tez.dag.app.dag.TaskAttempt;
 import org.apache.tez.dag.records.TezTaskAttemptID;
@@ -26,14 +27,18 @@ public class AMSchedulerEventTAEnded extends AMSchedulerEvent {
 
   private final TaskAttempt attempt;
   private final ContainerId containerId;
-  private TaskAttemptState state;
+  private final TaskAttemptState state;
+  private final TaskAttemptEndReason taskAttemptEndReason;
+  private final String diagnostics;
 
   public AMSchedulerEventTAEnded(TaskAttempt attempt, ContainerId containerId,
-      TaskAttemptState state) {
-    super(AMSchedulerEventType.S_TA_ENDED);
+      TaskAttemptState state, TaskAttemptEndReason taskAttemptEndReason, String diagnostics, int schedulerId) {
+    super(AMSchedulerEventType.S_TA_ENDED, schedulerId);
     this.attempt = attempt;
     this.containerId = containerId;
     this.state = state;
+    this.taskAttemptEndReason = taskAttemptEndReason;
+    this.diagnostics = diagnostics;
   }
 
   public TezTaskAttemptID getAttemptID() {
@@ -50,5 +55,13 @@ public class AMSchedulerEventTAEnded extends AMSchedulerEvent {
 
   public ContainerId getUsedContainerId() {
     return this.containerId;
+  }
+
+  public TaskAttemptEndReason getTaskAttemptEndReason() {
+    return taskAttemptEndReason;
+  }
+
+  public String getDiagnostics() {
+    return diagnostics;
   }
 }

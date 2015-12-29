@@ -24,10 +24,13 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Random;
 
@@ -85,6 +88,39 @@ public class TestMultiMRInput {
   }
 
   @Test(timeout = 5000)
+  public void test0PhysicalInputs() throws Exception {
+
+    Path workDir = new Path(TEST_ROOT_DIR, "testSingleSplit");
+    JobConf jobConf = new JobConf(defaultConf);
+    jobConf.setInputFormat(org.apache.hadoop.mapred.SequenceFileInputFormat.class);
+    FileInputFormat.setInputPaths(jobConf, workDir);
+
+    MRInputUserPayloadProto.Builder builder = MRInputUserPayloadProto.newBuilder();
+    builder.setGroupingEnabled(false);
+    builder.setConfigurationBytes(TezUtils.createByteStringFromConf(jobConf));
+    byte[] payload = builder.build().toByteArray();
+
+    InputContext inputContext = createTezInputContext(payload);
+
+
+    MultiMRInput mMrInput = new MultiMRInput(inputContext, 0);
+
+    mMrInput.initialize();
+
+    mMrInput.start();
+
+    assertEquals(0, mMrInput.getKeyValueReaders().size());
+
+    List<Event> events = new LinkedList<>();
+    try {
+      mMrInput.handleEvents(events);
+      fail("HandleEvents should cause an input with 0 physical inputs to fail");
+    } catch (Exception e) {
+      assertTrue(e instanceof IllegalStateException);
+    }
+  }
+
+  @Test(timeout = 5000)
   public void testSingleSplit() throws Exception {
 
     Path workDir = new Path(TEST_ROOT_DIR, "testSingleSplit");
@@ -121,9 +157,11 @@ public class TestMultiMRInput {
     input.handleEvents(eventList);
 
     int readerCount = 0;
+    int recordCount = 0;
     for (KeyValueReader reader : input.getKeyValueReaders()) {
       readerCount++;
       while (reader.next()) {
+        verify(inputContext, times(++recordCount) ).notifyProgress();
         if (data1.size() == 0) {
           fail("Found more records than expected");
         }

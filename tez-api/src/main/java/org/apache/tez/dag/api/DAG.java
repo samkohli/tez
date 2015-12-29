@@ -32,6 +32,12 @@ import java.util.Stack;
 
 import org.apache.commons.collections4.BidiMap;
 import org.apache.commons.collections4.bidimap.DualLinkedHashBidiMap;
+import org.apache.hadoop.classification.InterfaceStability;
+import org.apache.tez.client.CallerContext;
+import org.apache.tez.common.JavaOptsChecker;
+import org.apache.tez.dag.api.Vertex.VertexExecutionContext;
+import org.apache.tez.dag.api.records.DAGProtos;
+import org.apache.tez.serviceplugins.api.ServicePluginsDescriptor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.hadoop.classification.InterfaceAudience.Private;
@@ -60,9 +66,7 @@ import org.apache.tez.dag.api.records.DAGProtos.PlanVertexType;
 import org.apache.tez.dag.api.records.DAGProtos.VertexPlan;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Function;
 import com.google.common.base.Preconditions;
-import com.google.common.collect.Collections2;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
@@ -91,7 +95,9 @@ public class DAG {
   private DAGAccessControls dagAccessControls;
   Map<String, LocalResource> commonTaskLocalFiles = Maps.newHashMap();
   String dagInfo;
+  CallerContext callerContext;
   private Map<String,String> dagConf = new HashMap<String, String>();
+  private VertexExecutionContext defaultExecutionContext;
 
   private Stack<String> topologicalVertexStack = new Stack<String>();
 
@@ -165,9 +171,22 @@ public class DAG {
    *                                In the case of Hive, this could be the SQL query text.
    * @return {@link DAG}
    */
+  @Deprecated
   public synchronized DAG setDAGInfo(String dagInfo) {
     Preconditions.checkNotNull(dagInfo);
     this.dagInfo = dagInfo;
+    return this;
+  }
+
+
+  /**
+   * Set the Context in which Tez is being called.
+   * @param callerContext Caller Context
+   * @return {@link DAG}
+   */
+  public synchronized DAG setCallerContext(CallerContext callerContext) {
+    Preconditions.checkNotNull(callerContext);
+    this.callerContext = callerContext;
     return this;
   }
 
@@ -329,10 +348,50 @@ public class DAG {
     return this.name;
   }
 
+  /**
+   * This is currently used to setup additional configuration parameters which will be available
+   * in the DAG configuration used in the AppMaster. This API would be used for properties which
+   * are used by the Tez framework while executing the DAG. As an example, the number of attempts
+   * for a task.</p>
+   *
+   * A DAG inherits it's base properties from the ApplicationMaster within which it's running. This
+   * method allows for these properties to be overridden.
+   *
+   * Currently, properties which are used by the task runtime, such as the task to AM
+   * heartbeat interval, cannot be changed using this method. </p>
+   *
+   * Note: This API does not add any configuration to runtime components such as InputInitializers,
+   * OutputCommitters, Inputs and Outputs.
+   *
+   * @param property the property name
+   * @param value the value for the property
+   * @return the current DAG being constructed
+   */
+  @InterfaceStability.Unstable
   public DAG setConf(String property, String value) {
     TezConfiguration.validateProperty(property, Scope.DAG);
     dagConf.put(property, value);
     return this;
+  }
+
+  /**
+   * Sets the default execution context for the DAG. This can be overridden at a per Vertex level.
+   * See {@link org.apache.tez.dag.api.Vertex#setExecutionContext(VertexExecutionContext)}
+   *
+   * @param vertexExecutionContext the default execution context for the DAG
+   *
+   * @return this DAG
+   */
+  @Public
+  @InterfaceStability.Unstable
+  public synchronized DAG setExecutionContext(VertexExecutionContext vertexExecutionContext) {
+    this.defaultExecutionContext = vertexExecutionContext;
+    return this;
+  }
+
+  @Private
+  VertexExecutionContext getDefaultExecutionContext() {
+    return this.defaultExecutionContext;
   }
 
   @Private
@@ -692,22 +751,36 @@ public class DAG {
                            Map<String, LocalResource> tezJarResources, LocalResource binaryConfig,
                            boolean tezLrsAsArchive) {
     return createDag(tezConf, extraCredentials, tezJarResources, binaryConfig, tezLrsAsArchive,
-        null);
+        null, null, null);
   }
 
   // create protobuf message describing DAG
   @Private
   public synchronized DAGPlan createDag(Configuration tezConf, Credentials extraCredentials,
       Map<String, LocalResource> tezJarResources, LocalResource binaryConfig,
-      boolean tezLrsAsArchive, Map<String, String> additionalConfigs) {
+      boolean tezLrsAsArchive, Map<String, String> additionalConfigs,
+      ServicePluginsDescriptor servicePluginsDescriptor, JavaOptsChecker javaOptsChecker) {
     verify(true);
 
     DAGPlan.Builder dagBuilder = DAGPlan.newBuilder();
     dagBuilder.setName(this.name);
+
+    if (this.callerContext != null) {
+      dagBuilder.setCallerContext(DagTypeConverters.convertCallerContextToProto(callerContext));
+    }
     if (this.dagInfo != null && !this.dagInfo.isEmpty()) {
       dagBuilder.setDagInfo(this.dagInfo);
     }
-    
+
+    // Setup default execution context.
+    VertexExecutionContext defaultContext = getDefaultExecutionContext();
+    verifyExecutionContext(defaultContext, servicePluginsDescriptor, "DAGDefault");
+    if (defaultContext != null) {
+      DAGProtos.VertexExecutionContextProto contextProto = DagTypeConverters.convertToProto(
+          defaultContext);
+      dagBuilder.setDefaultExecutionContext(contextProto);
+    }
+
     if (!vertexGroups.isEmpty()) {
       for (VertexGroup av : vertexGroups) {
         GroupInfo groupInfo = av.getGroupInfo();
@@ -800,7 +873,18 @@ public class DAG {
       vertexBuilder.setName(vertex.getName());
       vertexBuilder.setType(PlanVertexType.NORMAL); // vertex type is implicitly NORMAL until  TEZ-46.
       vertexBuilder.setProcessorDescriptor(DagTypeConverters
-        .convertToDAGPlan(vertex.getProcessorDescriptor()));
+          .convertToDAGPlan(vertex.getProcessorDescriptor()));
+
+      // Vertex ExecutionContext setup
+      VertexExecutionContext execContext = vertex.getVertexExecutionContext();
+      verifyExecutionContext(execContext, servicePluginsDescriptor, vertex.getName());
+      if (execContext != null) {
+        DAGProtos.VertexExecutionContextProto contextProto =
+            DagTypeConverters.convertToProto(execContext);
+        vertexBuilder.setExecutionContext(contextProto);
+      }
+      // End of VertexExecutionContext setup.
+
       if (vertex.getInputs().size() > 0) {
         for (RootInputLeafOutput<InputDescriptor, InputInitializerDescriptor> input : vertex.getInputs()) {
           vertexBuilder.addInputs(DagTypeConverters.convertToDAGPlan(input));
@@ -828,8 +912,15 @@ public class DAG {
       taskConfigBuilder.setNumTasks(vertexParallelism);
       taskConfigBuilder.setMemoryMb(vertexTaskResource.getMemory());
       taskConfigBuilder.setVirtualCores(vertexTaskResource.getVirtualCores());
-      taskConfigBuilder.setJavaOpts(
-          TezClientUtils.addDefaultsToTaskLaunchCmdOpts(vertex.getTaskLaunchCmdOpts(), tezConf));
+
+      try {
+        taskConfigBuilder.setJavaOpts(
+            TezClientUtils.addDefaultsToTaskLaunchCmdOpts(vertex.getTaskLaunchCmdOpts(), tezConf,
+                javaOptsChecker));
+      } catch (TezException e) {
+        throw new TezUncheckedException("Invalid TaskLaunchCmdOpts defined for Vertex "
+            + vertex.getName() + " : " + e.getMessage(), e);
+      }
 
       taskConfigBuilder.setTaskModule(vertex.getName());
       if (!vertexLRs.isEmpty()) {
@@ -839,7 +930,10 @@ public class DAG {
       Map<String, String> taskEnv = Maps.newHashMap(vertex.getTaskEnvironment());
       TezYARNUtils.setupDefaultEnv(taskEnv, tezConf,
           TezConfiguration.TEZ_TASK_LAUNCH_ENV,
-          TezConfiguration.TEZ_TASK_LAUNCH_ENV_DEFAULT, tezLrsAsArchive);
+          TezConfiguration.TEZ_TASK_LAUNCH_ENV_DEFAULT,
+          TezConfiguration.TEZ_TASK_LAUNCH_CLUSTER_DEFAULT_ENV,
+          TezConfiguration.TEZ_TASK_LAUNCH_CLUSTER_DEFAULT_ENV_DEFAULT,
+          tezLrsAsArchive);
       for (Map.Entry<String, String> entry : taskEnv.entrySet()) {
         PlanKeyValuePair.Builder envSettingBuilder = PlanKeyValuePair.newBuilder();
         envSettingBuilder.setKey(entry.getKey());
@@ -946,4 +1040,76 @@ public class DAG {
     
     return dagBuilder.build();
   }
+
+  private void verifyExecutionContext(VertexExecutionContext executionContext,
+                                      ServicePluginsDescriptor servicePluginsDescriptor,
+                                      String context) {
+    if (executionContext != null) {
+      if (executionContext.shouldExecuteInContainers()) {
+        if (servicePluginsDescriptor == null || !servicePluginsDescriptor.areContainersEnabled()) {
+          throw new IllegalStateException("Invalid configuration. ExecutionContext for " + context +
+              " specifies container execution but this is disabled in the ServicePluginDescriptor");
+        }
+      }
+      if (executionContext.shouldExecuteInAm()) {
+        if (servicePluginsDescriptor == null || !servicePluginsDescriptor.isUberEnabled()) {
+          throw new IllegalStateException("Invalid configuration. ExecutionContext for " + context +
+              " specifies AM execution but this is disabled in the ServicePluginDescriptor");
+        }
+      }
+      if (executionContext.getTaskSchedulerName() != null) {
+        boolean found = false;
+        if (servicePluginsDescriptor != null) {
+          found = checkNamedEntityExists(executionContext.getTaskSchedulerName(),
+              servicePluginsDescriptor.getTaskSchedulerDescriptors());
+        }
+        if (!found) {
+          throw new IllegalStateException("Invalid configuration. ExecutionContext for " + context +
+              " specifies task scheduler as " + executionContext.getTaskSchedulerName() +
+              " which is not part of the ServicePluginDescriptor");
+        }
+      }
+      if (executionContext.getContainerLauncherName() != null) {
+        boolean found = false;
+        if (servicePluginsDescriptor != null) {
+          found = checkNamedEntityExists(executionContext.getContainerLauncherName(),
+              servicePluginsDescriptor.getContainerLauncherDescriptors());
+        }
+        if (!found) {
+          throw new IllegalStateException("Invalid configuration. ExecutionContext for " + context +
+              " specifies container launcher as " + executionContext.getContainerLauncherName() +
+              " which is not part of the ServicePluginDescriptor");
+        }
+      }
+      if (executionContext.getTaskCommName() != null) {
+        boolean found = false;
+        if (servicePluginsDescriptor != null) {
+          found = checkNamedEntityExists(executionContext.getTaskCommName(),
+              servicePluginsDescriptor.getTaskCommunicatorDescriptors());
+        }
+        if (!found) {
+          throw new IllegalStateException("Invalid configuration. ExecutionContext for " + context +
+              " specifies task communicator as " + executionContext.getTaskCommName() +
+              " which is not part of the ServicePluginDescriptor");
+        }
+      }
+    }
+  }
+
+  private boolean checkNamedEntityExists(String expected, NamedEntityDescriptor[] namedEntities) {
+    if (namedEntities == null) {
+      return false;
+    }
+    for (NamedEntityDescriptor named : namedEntities) {
+      if (named.getEntityName().equals(expected)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  public synchronized CallerContext getCallerContext() {
+    return this.callerContext;
+  }
+
 }

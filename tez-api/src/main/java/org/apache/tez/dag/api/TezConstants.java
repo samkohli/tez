@@ -102,4 +102,14 @@ public class TezConstants {
   /// Version-related Environment variables
   public static final String TEZ_CLIENT_VERSION_ENV = "TEZ_CLIENT_VERSION";
 
+  private static final String TEZ_AM_SERVICE_PLUGIN_NAME_YARN_CONTAINERS = "TezYarn";
+  private static final String TEZ_AM_SERVICE_PLUGIN_NAME_IN_AM = "TezUber";
+
+  public static String getTezYarnServicePluginName() {
+    return TEZ_AM_SERVICE_PLUGIN_NAME_YARN_CONTAINERS;
+  }
+
+  public static String getTezUberServicePluginName() {
+    return TEZ_AM_SERVICE_PLUGIN_NAME_IN_AM;
+  }
 }

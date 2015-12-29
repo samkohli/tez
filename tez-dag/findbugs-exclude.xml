@@ -18,6 +18,8 @@
     <Or>
       <Field name="blacklistDisablePercent" />
       <Field name="maxTaskFailuresPerNode" />
+      <Field name="nodeBlacklistingEnabled" />
+      <Field name="nodeUpdatesRescheduleEnabled" />
     </Or>
     <Bug pattern="IS2_INCONSISTENT_SYNC" />
   </Match>
@@ -81,12 +83,23 @@
   </Match>
 
   <Match>
-    <Class name="~org\.apache\.tez\.dag\.app\.rm\.TaskSchedulerEventHandler"/>
+    <Class name="org.apache.tez.dag.app.rm.node.PerSourceNodeTracker" />
     <Bug pattern="BC_UNCONFIRMED_CAST"/>
   </Match>
 
   <Match>
-    <Class name="org.apache.tez.dag.app.rm.TaskSchedulerAppCallbackWrapper"/>
+    <Class name="~org\.apache\.tez\.dag\.app\.rm\.TaskSchedulerManager"/>
+    <Bug pattern="BC_UNCONFIRMED_CAST"/>
+  </Match>
+
+  <Match>
+    <Class name="org.apache.tez.dag.app.launcher.ContainerLauncherManager" />
+    <Method name="handle" params="org.apache.tez.dag.app.rm.ContainerLauncherEvent" returns="void" />
+    <Bug pattern="BC_UNCONFIRMED_CAST" />
+  </Match>
+
+  <Match>
+    <Class name="org.apache.tez.dag.app.rm.TaskSchedulerContextImplWrapper"/>
     <Bug pattern="RV_RETURN_VALUE_IGNORED_BAD_PRACTICE"/>
   </Match>
 
@@ -139,7 +152,7 @@
       <Field name="context"/>
       <Field name="currentDAG"/>
       <Field name="state"/>
-      <Field name="taskSchedulerEventHandler"/>
+      <Field name="taskSchedulerManager"/>
       <Field name="versionMismatch"/>
       <Field name="versionMismatchDiagnostics"/>
       <Field name="containers"/>
@@ -149,14 +162,8 @@
       <Field name="nodes"/>
       <Field name="recoveryEnabled"/>
       <Field name="isLocal"/>
+      <Field name="hadoopShim"/>
     </Or>
-    <Bug pattern="IS2_INCONSISTENT_SYNC"/>
-  </Match>
-
-  <!-- TEZ-1955 -->
-  <Match>
-    <Class name="org.apache.tez.dag.app.rm.TaskSchedulerEventHandler"/>
-    <Field name="taskScheduler"/>
     <Bug pattern="IS2_INCONSISTENT_SYNC"/>
   </Match>
 
@@ -235,6 +242,7 @@
     <Or>
       <Field name="MAX_ALLOWED_OUTPUT_FAILURES_FRACTION"/>
       <Field name="MAX_ALLOWED_OUTPUT_FAILURES"/>
+      <Field name="MAX_ALLOWED_TIME_FOR_TASK_READ_ERROR_SEC"/>
     </Or>
     <Bug pattern="ST_WRITE_TO_STATIC_FROM_INSTANCE_METHOD"/>
   </Match>

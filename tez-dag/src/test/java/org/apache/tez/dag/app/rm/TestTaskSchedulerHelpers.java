@@ -24,6 +24,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
 
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.Collection;
 import java.util.LinkedList;
@@ -40,9 +41,14 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import com.google.common.base.Preconditions;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.service.AbstractService;
 import org.apache.hadoop.yarn.api.protocolrecords.RegisterApplicationMasterResponse;
 import org.apache.hadoop.yarn.api.records.ApplicationAccessType;
+import org.apache.hadoop.yarn.api.records.ApplicationAttemptId;
 import org.apache.hadoop.yarn.api.records.Container;
 import org.apache.hadoop.yarn.api.records.ContainerId;
 import org.apache.hadoop.yarn.api.records.ContainerStatus;
@@ -54,13 +60,16 @@ import org.apache.hadoop.yarn.client.api.AMRMClient;
 import org.apache.hadoop.yarn.client.api.impl.AMRMClientImpl;
 import org.apache.hadoop.yarn.event.Event;
 import org.apache.hadoop.yarn.event.EventHandler;
+import org.apache.tez.common.ContainerSignatureMatcher;
+import org.apache.tez.common.TezUtils;
+import org.apache.tez.dag.api.NamedEntityDescriptor;
+import org.apache.tez.dag.api.TezUncheckedException;
+import org.apache.tez.dag.api.UserPayload;
 import org.apache.tez.dag.app.AppContext;
+import org.apache.tez.dag.app.ServicePluginLifecycleAbstractService;
 import org.apache.tez.dag.app.rm.YarnTaskSchedulerService.CookieContainerRequest;
-import org.apache.tez.dag.app.rm.TaskSchedulerService.TaskSchedulerAppCallback;
-import org.apache.tez.dag.app.rm.container.ContainerSignatureMatcher;
-
-import com.google.common.base.Preconditions;
-import com.google.common.collect.Maps;
+import org.apache.tez.serviceplugins.api.TaskScheduler;
+import org.apache.tez.serviceplugins.api.TaskSchedulerContext;
 
 class TestTaskSchedulerHelpers {
 
@@ -116,42 +125,54 @@ class TestTaskSchedulerHelpers {
   }
   
   // Overrides start / stop. Will be controlled without the extra event handling thread.
-  static class TaskSchedulerEventHandlerForTest extends
-      TaskSchedulerEventHandler {
+  static class TaskSchedulerManagerForTest extends
+      TaskSchedulerManager {
 
     private TezAMRMClientAsync<CookieContainerRequest> amrmClientAsync;
     private ContainerSignatureMatcher containerSignatureMatcher;
+    private UserPayload defaultPayload;
 
     @SuppressWarnings("rawtypes")
-    public TaskSchedulerEventHandlerForTest(AppContext appContext,
-        EventHandler eventHandler,
-        TezAMRMClientAsync<CookieContainerRequest> amrmClientAsync,
-        ContainerSignatureMatcher containerSignatureMatcher) {
-      super(appContext, null, eventHandler, containerSignatureMatcher, null);
+    public TaskSchedulerManagerForTest(AppContext appContext,
+                                       EventHandler eventHandler,
+                                       TezAMRMClientAsync<CookieContainerRequest> amrmClientAsync,
+                                       ContainerSignatureMatcher containerSignatureMatcher,
+                                       UserPayload defaultPayload) {
+      super(appContext, null, eventHandler, containerSignatureMatcher, null,
+          Lists.newArrayList(new NamedEntityDescriptor("FakeScheduler", null)),
+          false);
       this.amrmClientAsync = amrmClientAsync;
       this.containerSignatureMatcher = containerSignatureMatcher;
+      this.defaultPayload = defaultPayload;
     }
 
+    @SuppressWarnings("unchecked")
     @Override
-    public TaskSchedulerService createTaskScheduler(String host, int port,
-        String trackingUrl, AppContext appContext) {
-      return new TaskSchedulerWithDrainableAppCallback(this,
-          containerSignatureMatcher, host, port, trackingUrl, amrmClientAsync,
-          appContext);
+    public void instantiateSchedulers(String host, int port, String trackingUrl,
+                                      AppContext appContext) {
+      TaskSchedulerContext taskSchedulerContext =
+          new TaskSchedulerContextImpl(this, appContext, 0, trackingUrl, 1000, host, port,
+              defaultPayload);
+      TaskSchedulerContextImplWrapper wrapper =
+          new TaskSchedulerContextImplWrapper(taskSchedulerContext,
+              new CountingExecutorService(appCallbackExecutor));
+      TaskSchedulerContextDrainable drainable = new TaskSchedulerContextDrainable(wrapper);
+      taskSchedulers[0] =
+          new TaskSchedulerWithDrainableContext(drainable, amrmClientAsync);
+      taskSchedulerServiceWrappers[0] = new ServicePluginLifecycleAbstractService(taskSchedulers[0]);
     }
 
-    public TaskSchedulerService getSpyTaskScheduler() {
-      return this.taskScheduler;
+    public TaskScheduler getSpyTaskScheduler() {
+      return taskSchedulers[0];
     }
 
     @Override
     public void serviceStart() {
-      TaskSchedulerService taskSchedulerReal = createTaskScheduler("host", 0, "",
-        appContext);
+      instantiateSchedulers("host", 0, "", appContext);
       // Init the service so that reuse configuration is picked up.
-      ((AbstractService)taskSchedulerReal).init(getConfig());
-      ((AbstractService)taskSchedulerReal).start();
-      taskScheduler = spy(taskSchedulerReal);
+      ((AbstractService)taskSchedulerServiceWrappers[0]).init(getConfig());
+      ((AbstractService)taskSchedulerServiceWrappers[0]).start();
+      taskSchedulers[0] = spy(taskSchedulers[0]);
     }
 
     @Override
@@ -190,61 +211,31 @@ class TestTaskSchedulerHelpers {
     }
   }
 
-  static class TaskSchedulerWithDrainableAppCallback extends YarnTaskSchedulerService {
+  static class TaskSchedulerWithDrainableContext extends YarnTaskSchedulerService {
 
-    private TaskSchedulerAppCallbackDrainable drainableAppCallback;
 
-    public TaskSchedulerWithDrainableAppCallback(
-        TaskSchedulerAppCallback appClient,
-        ContainerSignatureMatcher containerSignatureMatcher,
-        String appHostName, int appHostPort, String appTrackingUrl,
-        AppContext appContext) {
-      super(appClient, containerSignatureMatcher, appHostName, appHostPort,
-          appTrackingUrl, appContext);
+    public TaskSchedulerWithDrainableContext(
+        TaskSchedulerContextDrainable appClient,
+        TezAMRMClientAsync<CookieContainerRequest> client) {
+      super(appClient, client);
       shouldUnregister.set(true);
     }
 
-    public TaskSchedulerWithDrainableAppCallback(
-        TaskSchedulerAppCallback appClient,
-        ContainerSignatureMatcher containerSignatureMatcher,
-        String appHostName, int appHostPort, String appTrackingUrl,
-        TezAMRMClientAsync<CookieContainerRequest> client,
-        AppContext appContext) {
-      super(appClient, containerSignatureMatcher, appHostName, appHostPort,
-          appTrackingUrl, client, appContext);
-      shouldUnregister.set(true);
-    }
-
-    @Override
-    TaskSchedulerAppCallback createAppCallbackDelegate(
-        TaskSchedulerAppCallback realAppClient) {
-      drainableAppCallback = new TaskSchedulerAppCallbackDrainable(
-          new TaskSchedulerAppCallbackWrapper(realAppClient,
-              appCallbackExecutor));
-      return drainableAppCallback;
-    }
-    
-    @Override
-    ExecutorService createAppCallbackExecutorService() {
-      ExecutorService real = super.createAppCallbackExecutorService();
-      return new CountingExecutorService(real);
-    }
-
-    public TaskSchedulerAppCallbackDrainable getDrainableAppCallback() {
-      return drainableAppCallback;
+    public TaskSchedulerContextDrainable getDrainableAppCallback() {
+      return (TaskSchedulerContextDrainable)getContext();
     }
   }
 
   @SuppressWarnings("rawtypes")
-  static class TaskSchedulerAppCallbackDrainable implements TaskSchedulerAppCallback {
+  static class TaskSchedulerContextDrainable implements TaskSchedulerContext {
     int completedEvents;
     int invocations;
-    private TaskSchedulerAppCallback real;
+    private TaskSchedulerContext real;
     private CountingExecutorService countingExecutorService;
     final AtomicInteger count = new AtomicInteger(0);
     
-    public TaskSchedulerAppCallbackDrainable(TaskSchedulerAppCallbackWrapper real) {
-      countingExecutorService = (CountingExecutorService) real.executorService;
+    public TaskSchedulerContextDrainable(TaskSchedulerContextImplWrapper real) {
+      countingExecutorService = (CountingExecutorService) real.getExecutorService();
       this.real = real;
     }
 
@@ -303,6 +294,53 @@ class TestTaskSchedulerHelpers {
     public AppFinalStatus getFinalAppStatus() {
       invocations++;
       return real.getFinalAppStatus();
+    }
+
+    // Not incrementing invocations for methods which to not obtain locks,
+    // and do not go via the executor service.
+    @Override
+    public UserPayload getInitialUserPayload() {
+      return real.getInitialUserPayload();
+    }
+
+    @Override
+    public String getAppTrackingUrl() {
+      return real.getAppTrackingUrl();
+    }
+
+    @Override
+    public long getCustomClusterIdentifier() {
+      return real.getCustomClusterIdentifier();
+    }
+
+    @Override
+    public ContainerSignatureMatcher getContainerSignatureMatcher() {
+      return real.getContainerSignatureMatcher();
+    }
+
+    @Override
+    public ApplicationAttemptId getApplicationAttemptId() {
+      return real.getApplicationAttemptId();
+    }
+
+    @Override
+    public String getAppHostName() {
+      return real.getAppHostName();
+    }
+
+    @Override
+    public int getAppClientPort() {
+      return real.getAppClientPort();
+    }
+
+    @Override
+    public boolean isSession() {
+      return real.isSession();
+    }
+
+    @Override
+    public AMState getAMState() {
+      return real.getAMState();
     }
 
     @Override
@@ -386,7 +424,11 @@ class TestTaskSchedulerHelpers {
       }
     }
   }
-  
+
+  static CountingExecutorService createCountingExecutingService(ExecutorService rawExecutor) {
+    return new CountingExecutorService(rawExecutor);
+  }
+
   @SuppressWarnings({"rawtypes", "unchecked"})
   private static class CountingExecutorService implements ExecutorService {
 
@@ -466,7 +508,56 @@ class TestTaskSchedulerHelpers {
         throws InterruptedException, ExecutionException, TimeoutException {
       throw new UnsupportedOperationException("Not expected to be used");
     }
-    
+  }
+
+  static TaskSchedulerContext setupMockTaskSchedulerContext(String appHost, int appPort,
+                                                            String appUrl, Configuration conf) {
+    return setupMockTaskSchedulerContext(appHost, appPort, appUrl, false, conf);
+  }
+
+  static TaskSchedulerContext setupMockTaskSchedulerContext(String appHost, int appPort,
+                                                            String appUrl, boolean isSession,
+                                                            Configuration conf) {
+    return setupMockTaskSchedulerContext(appHost, appPort, appUrl, isSession, null, null, null,
+        conf);
+  }
+
+  static TaskSchedulerContext setupMockTaskSchedulerContext(String appHost, int appPort,
+                                                            String appUrl, boolean isSession,
+                                                            ApplicationAttemptId appAttemptId,
+                                                            Long customAppIdentifier,
+                                                            ContainerSignatureMatcher containerSignatureMatcher,
+                                                            Configuration conf) {
+
+    TaskSchedulerContext mockContext = mock(TaskSchedulerContext.class);
+    when(mockContext.getAppHostName()).thenReturn(appHost);
+    when(mockContext.getAppClientPort()).thenReturn(appPort);
+    when(mockContext.getAppTrackingUrl()).thenReturn(appUrl);
+
+    when(mockContext.getAMState()).thenReturn(TaskSchedulerContext.AMState.RUNNING_APP);
+    UserPayload userPayload;
+    try {
+      userPayload = TezUtils.createUserPayloadFromConf(conf);
+    } catch (IOException e) {
+      throw new TezUncheckedException(e);
+    }
+    when(mockContext.getInitialUserPayload()).thenReturn(userPayload);
+    when(mockContext.isSession()).thenReturn(isSession);
+    if (containerSignatureMatcher != null) {
+      when(mockContext.getContainerSignatureMatcher())
+          .thenReturn(containerSignatureMatcher);
+    } else {
+      when(mockContext.getContainerSignatureMatcher())
+          .thenReturn(new AlwaysMatchesContainerMatcher());
+    }
+    if (appAttemptId != null) {
+      when(mockContext.getApplicationAttemptId()).thenReturn(appAttemptId);
+    }
+    if (customAppIdentifier != null) {
+      when(mockContext.getCustomClusterIdentifier()).thenReturn(customAppIdentifier);
+    }
+
+    return mockContext;
   }
 
 }

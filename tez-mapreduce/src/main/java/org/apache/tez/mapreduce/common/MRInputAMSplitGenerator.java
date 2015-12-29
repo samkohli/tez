@@ -23,6 +23,7 @@ import java.util.List;
 import com.google.common.base.Stopwatch;
 import com.google.common.collect.Lists;
 
+import org.apache.tez.mapreduce.grouper.TezSplitGrouper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.hadoop.classification.InterfaceAudience.Public;
@@ -69,62 +70,59 @@ public class MRInputAMSplitGenerator extends InputInitializer {
 
   @Override
   public List<Event> initialize() throws Exception {
-    Stopwatch sw = null;
-    if (LOG.isDebugEnabled()) {
-      sw = new Stopwatch().start();
-    }
+    Stopwatch sw = new Stopwatch().start();
     MRInputUserPayloadProto userPayloadProto = MRInputHelpers
         .parseMRInputPayload(getContext().getInputUserPayload());
+    sw.stop();
     if (LOG.isDebugEnabled()) {
-      sw.stop();
       LOG.debug("Time to parse MRInput payload into prot: "
           + sw.elapsedMillis());
     }
-    if (LOG.isDebugEnabled()) {
-      sw.reset().start();
-    }
+    sw.reset().start();
     Configuration conf = TezUtils.createConfFromByteString(userPayloadProto
         .getConfigurationBytes());
     
     sendSerializedEvents = conf.getBoolean(
         MRJobConfig.MR_TEZ_INPUT_INITIALIZER_SERIALIZE_EVENT_PAYLOAD,
         MRJobConfig.MR_TEZ_INPUT_INITIALIZER_SERIALIZE_EVENT_PAYLOAD_DEFAULT);
-    LOG.info("Emitting serialized splits: " + sendSerializedEvents);
+
+    sw.stop();
     if (LOG.isDebugEnabled()) {
-      sw.stop();
+      LOG.debug("Emitting serialized splits: " + sendSerializedEvents + " for input " +
+          getContext().getInputName());
       LOG.debug("Time converting ByteString to configuration: " + sw.elapsedMillis());
     }
 
-    if (LOG.isDebugEnabled()) {
-      sw.reset().start();
-    }
+    sw.reset().start();
 
     int totalResource = getContext().getTotalAvailableResource().getMemory();
     int taskResource = getContext().getVertexTaskResource().getMemory();
     float waves = conf.getFloat(
-        TezMapReduceSplitsGrouper.TEZ_GROUPING_SPLIT_WAVES,
-        TezMapReduceSplitsGrouper.TEZ_GROUPING_SPLIT_WAVES_DEFAULT);
+        TezSplitGrouper.TEZ_GROUPING_SPLIT_WAVES,
+        TezSplitGrouper.TEZ_GROUPING_SPLIT_WAVES_DEFAULT);
 
     int numTasks = (int)((totalResource*waves)/taskResource);
 
+
+
+    boolean groupSplits = userPayloadProto.getGroupingEnabled();
     LOG.info("Input " + getContext().getInputName() + " asking for " + numTasks
         + " tasks. Headroom: " + totalResource + " Task Resource: "
-        + taskResource + " waves: " + waves);
+        + taskResource + " waves: " + waves + ", groupingEnabled: " + groupSplits);
 
     // Read all credentials into the credentials instance stored in JobConf.
     JobConf jobConf = new JobConf(conf);
     jobConf.getCredentials().mergeAll(UserGroupInformation.getCurrentUser().getCredentials());
 
     InputSplitInfoMem inputSplitInfo = null;
-    boolean groupSplits = userPayloadProto.getGroupingEnabled();
+
     if (groupSplits) {
-      LOG.info("Grouping input splits");
       inputSplitInfo = MRInputHelpers.generateInputSplitsToMem(jobConf, true, numTasks);
     } else {
       inputSplitInfo = MRInputHelpers.generateInputSplitsToMem(jobConf, false, 0);
     }
+    sw.stop();
     if (LOG.isDebugEnabled()) {
-      sw.stop();
       LOG.debug("Time to create splits to mem: " + sw.elapsedMillis());
     }
 

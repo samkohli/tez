@@ -62,10 +62,11 @@ public class TezRuntimeUtils {
     Class<? extends Combiner> clazz;
     String className = conf.get(TezRuntimeConfiguration.TEZ_RUNTIME_COMBINER_CLASS);
     if (className == null) {
-      LOG.info("No combiner specified via " + TezRuntimeConfiguration.TEZ_RUNTIME_COMBINER_CLASS + ". Combiner will not be used");
       return null;
     }
-    LOG.info("Using Combiner class: " + className);
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("Using Combiner class: " + className);
+    }
     try {
       clazz = (Class<? extends Combiner>) conf.getClassByName(className);
     } catch (ClassNotFoundException e) {
@@ -106,7 +107,9 @@ public class TezRuntimeUtils {
           + conf.get(TezRuntimeConfiguration.TEZ_RUNTIME_PARTITIONER_CLASS), e);
     }
 
-    LOG.info("Using partitioner class: " + clazz.getName());
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("Using partitioner class: " + clazz.getName());
+    }
 
     Partitioner partitioner = null;
 

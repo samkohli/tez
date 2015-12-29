@@ -24,12 +24,20 @@ import java.io.IOException;
 import java.io.PrintStream;
 import java.util.Set;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Sets;
 
 import org.apache.commons.cli.Options;
+import org.apache.hadoop.yarn.api.records.ApplicationId;
+import org.apache.tez.client.CallerContext;
+import org.apache.tez.common.TezUtilsInternal;
+import org.apache.tez.hadoop.shim.DefaultHadoopShim;
+import org.apache.tez.hadoop.shim.HadoopShim;
+import org.apache.tez.hadoop.shim.HadoopShimsLoader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.hadoop.classification.InterfaceAudience;
+import org.apache.hadoop.classification.InterfaceAudience.Private;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.security.UserGroupInformation;
@@ -54,10 +62,13 @@ public abstract class TezExampleBase extends Configured implements Tool {
   protected static final String DISABLE_SPLIT_GROUPING = "disableSplitGrouping";
   protected static final String LOCAL_MODE = "local";
   protected static final String COUNTER_LOG = "counter";
+  protected static final String GENERATE_SPLIT_IN_CLIENT = "generateSplitInClient";
 
   private boolean disableSplitGrouping = false;
   private boolean isLocalMode = false;
   private boolean isCountersLog = false;
+  private boolean generateSplitInClient = false;
+  private HadoopShim hadoopShim;
 
   protected boolean isCountersLog() {
 	  return isCountersLog;
@@ -67,11 +78,16 @@ public abstract class TezExampleBase extends Configured implements Tool {
     return disableSplitGrouping;
   }
 
+  protected boolean isGenerateSplitInClient() {
+    return generateSplitInClient;
+  }
+
   private Options getExtraOptions() {
     Options options = new Options();
     options.addOption(LOCAL_MODE, false, "run it as local mode");
     options.addOption(DISABLE_SPLIT_GROUPING, false , "disable split grouping");
     options.addOption(COUNTER_LOG, false , "print counter log");
+    options.addOption(GENERATE_SPLIT_IN_CLIENT, false, "whether generate split in client");
     return options;
   }
 
@@ -87,8 +103,12 @@ public abstract class TezExampleBase extends Configured implements Tool {
       disableSplitGrouping = true;
     }
     if (optionParser.getCommandLine().hasOption(COUNTER_LOG)) {
-        isCountersLog = true;
+      isCountersLog = true;
     }
+    if (optionParser.getCommandLine().hasOption(GENERATE_SPLIT_IN_CLIENT)) {
+      generateSplitInClient = true;
+    }
+    hadoopShim = new HadoopShimsLoader(conf).getHadoopShim();
 
     return _execute(otherArgs, null, null);
   }
@@ -109,6 +129,7 @@ public abstract class TezExampleBase extends Configured implements Tool {
   public int run(TezConfiguration conf, String[] args, @Nullable TezClient tezClient) throws
       Exception {
     setConf(conf);
+    hadoopShim = new HadoopShimsLoader(conf).getHadoopShim();
     GenericOptionsParser optionParser = new GenericOptionsParser(conf, getExtraOptions(), args);
     if (optionParser.getCommandLine().hasOption(LOCAL_MODE)) {
       isLocalMode = true;
@@ -120,7 +141,10 @@ public abstract class TezExampleBase extends Configured implements Tool {
       disableSplitGrouping = true;
     }
     if (optionParser.getCommandLine().hasOption(COUNTER_LOG)) {
-        isCountersLog = true;
+      isCountersLog = true;
+    }
+    if (optionParser.getCommandLine().hasOption(GENERATE_SPLIT_IN_CLIENT)) {
+      generateSplitInClient = true;
     }
     String[] otherArgs = optionParser.getRemainingArgs();
     return _execute(otherArgs, conf, tezClient);
@@ -138,6 +162,21 @@ public abstract class TezExampleBase extends Configured implements Tool {
   public int runDag(DAG dag, boolean printCounters, Logger logger) throws TezException,
       InterruptedException, IOException {
     tezClientInternal.waitTillReady();
+
+    CallerContext callerContext = CallerContext.create("TezExamples",
+        "Tez Example DAG: " + dag.getName());
+    ApplicationId appId = tezClientInternal.getAppMasterApplicationId();
+    if (hadoopShim == null) {
+      Configuration conf = (getConf() == null ? new Configuration(false) : getConf());
+      hadoopShim = new HadoopShimsLoader(conf).getHadoopShim();
+    }
+
+    if (appId != null) {
+      TezUtilsInternal.setHadoopCallerContext(hadoopShim, appId);
+      callerContext.setCallerIdAndType(appId.toString(), "TezExampleApplication");
+    }
+    dag.setCallerContext(callerContext);
+
     DAGClient dagClient = tezClientInternal.submitDAG(dag);
     Set<StatusGetOpts> getOpts = Sets.newHashSet();
     if (printCounters) {
@@ -225,6 +264,7 @@ public abstract class TezExampleBase extends Configured implements Tool {
     ps.println("-" + DISABLE_SPLIT_GROUPING + "\t\t disable split grouping for MRInput,"
         + " enable split grouping without this option.");
     ps.println("-" + COUNTER_LOG + "\t\t to print counters information");
+    ps.println("-" + GENERATE_SPLIT_IN_CLIENT + "\t\tgenerate input split in client");
     ps.println();
     ps.println("The Tez example extra options usage syntax is ");
     ps.println("example_name [extra_options] [example_parameters]");
@@ -252,4 +292,14 @@ public abstract class TezExampleBase extends Configured implements Tool {
    */
   protected abstract int runJob(String[] args, TezConfiguration tezConf,
                                 TezClient tezClient) throws Exception;
+  
+  @Private
+  @VisibleForTesting
+  public ApplicationId getAppId() {
+    if (tezClientInternal == null) {
+      LOG.warn("TezClient is not initialized, return null for AppId");
+      return null;
+    }
+    return tezClientInternal.getAppMasterApplicationId();
+  }
 }

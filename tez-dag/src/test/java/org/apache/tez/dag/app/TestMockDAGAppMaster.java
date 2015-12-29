@@ -28,6 +28,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.commons.lang.StringUtils;
 import org.apache.commons.lang.SystemUtils;
@@ -73,6 +74,7 @@ import org.apache.tez.dag.api.client.VertexStatus;
 import org.apache.tez.dag.api.client.VertexStatus.State;
 import org.apache.tez.dag.api.oldrecords.TaskAttemptState;
 import org.apache.tez.dag.app.MockDAGAppMaster.CountersDelegate;
+import org.apache.tez.dag.app.MockDAGAppMaster.ContainerDelegate;
 import org.apache.tez.dag.app.MockDAGAppMaster.EventsDelegate;
 import org.apache.tez.dag.app.MockDAGAppMaster.MockContainerLauncher;
 import org.apache.tez.dag.app.MockDAGAppMaster.MockContainerLauncher.ContainerData;
@@ -100,6 +102,8 @@ import org.apache.tez.runtime.api.impl.TaskSpec;
 import org.apache.tez.runtime.api.impl.TaskStatistics;
 import org.apache.tez.runtime.api.impl.TezEvent;
 import org.apache.tez.runtime.api.impl.EventMetaData.EventProducerConsumerType;
+import org.apache.tez.serviceplugins.api.ContainerLaunchRequest;
+import org.apache.tez.serviceplugins.api.ContainerStopRequest;
 import org.junit.Assert;
 import org.junit.Ignore;
 import org.junit.Test;
@@ -126,17 +130,17 @@ public class TestMockDAGAppMaster {
   
   static class TestEventsDelegate implements EventsDelegate {
     @Override
-    public void getEvents(TaskSpec taskSpec, List<TezEvent> events) {
+    public void getEvents(TaskSpec taskSpec, List<TezEvent> events, long time) {
       for (OutputSpec output : taskSpec.getOutputs()) {
         if (output.getPhysicalEdgeCount() == 1) {
           events.add(new TezEvent(DataMovementEvent.create(0, 0, 0, null), new EventMetaData(
               EventProducerConsumerType.OUTPUT, taskSpec.getVertexName(), output
-                  .getDestinationVertexName(), taskSpec.getTaskAttemptID())));
+                  .getDestinationVertexName(), taskSpec.getTaskAttemptID()), time));
         } else {
           events.add(new TezEvent(CompositeDataMovementEvent.create(0,
               output.getPhysicalEdgeCount(), null), new EventMetaData(
               EventProducerConsumerType.OUTPUT, taskSpec.getVertexName(), output
-                  .getDestinationVertexName(), taskSpec.getTaskAttemptID())));
+                  .getDestinationVertexName(), taskSpec.getTaskAttemptID()), time));
         }
       }
     }    
@@ -200,7 +204,7 @@ public class TestMockDAGAppMaster {
     mockLauncher.waitTillContainersLaunched();
     ContainerData cData = mockLauncher.getContainers().values().iterator().next();
     DAGImpl dagImpl = (DAGImpl) mockApp.getContext().getCurrentDAG();
-    mockApp.getTaskSchedulerEventHandler().preemptContainer(cData.cId);
+    mockApp.getTaskSchedulerManager().preemptContainer(0, cData.cId);
     
     mockLauncher.startScheduling(true);
     dagClient.waitForCompletion();
@@ -406,6 +410,52 @@ public class TestMockDAGAppMaster {
 
     tezClient.stop();
   }
+  
+  @Test (timeout = 100000)
+  public void testConcurrencyLimit() throws Exception {
+    // the test relies on local mode behavior of launching a new container per task.
+    // so task concurrency == container concurrency
+    TezConfiguration tezconf = new TezConfiguration(defaultConf);
+    
+    final int concurrencyLimit = 5;
+    MockTezClient tezClient = new MockTezClient("testMockAM", tezconf, true, null, null, null,
+        null, false, false, concurrencyLimit*4, 1000);
+
+    tezClient.start();
+    
+    MockDAGAppMaster mockApp = tezClient.getLocalClient().getMockApp();
+    MockContainerLauncher mockLauncher = mockApp.getContainerLauncher();
+    mockLauncher.startScheduling(false);
+    
+    final AtomicInteger concurrency = new AtomicInteger(0);
+    final AtomicBoolean exceededConcurrency = new AtomicBoolean(false);
+    mockApp.containerDelegate = new ContainerDelegate() {
+      @Override
+      public void stop(ContainerStopRequest event) {
+        concurrency.decrementAndGet();
+      }
+      @Override
+      public void launch(ContainerLaunchRequest event) {
+        int maxConc = concurrency.incrementAndGet();
+        if (maxConc > concurrencyLimit) {
+          exceededConcurrency.set(true);
+        }
+        System.out.println("Launched: " + maxConc);
+      }
+    };
+    DAG dag = DAG.create("testConcurrencyLimit");
+    Vertex vA = Vertex.create("A", ProcessorDescriptor.create("Proc.class"), 20).setConf(
+        TezConfiguration.TEZ_AM_VERTEX_MAX_TASK_CONCURRENCY, String.valueOf(concurrencyLimit));
+    dag.addVertex(vA);
+
+    mockLauncher.startScheduling(true);
+    DAGClient dagClient = tezClient.submitDAG(dag);
+    dagClient.waitForCompletion();
+    Assert.assertEquals(DAGStatus.State.SUCCEEDED, dagClient.getDAGStatus(null).getState());
+    Assert.assertFalse(exceededConcurrency.get());
+    tezClient.stop();
+  }
+
 
   @Test (timeout = 10000)
   public void testBasicCounters() throws Exception {

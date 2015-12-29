@@ -266,7 +266,9 @@ public class HttpConnection extends BaseHttpConnection {
     stopWatch.reset().start();
     try {
       if (input != null) {
-        LOG.info("Closing input on " + logIdentifier);
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("Closing input on " + logIdentifier);
+        }
         input.close();
         input = null;
       }
@@ -277,7 +279,7 @@ public class HttpConnection extends BaseHttpConnection {
       }
       if (connection != null && (disconnect || !httpConnParams.isKeepAlive())) {
         if (LOG.isDebugEnabled()) {
-          LOG.debug("Closing connection on " + logIdentifier);
+          LOG.debug("Closing connection on " + logIdentifier + ", disconnectParam=" + disconnect);
         }
         connection.disconnect();
         connection = null;

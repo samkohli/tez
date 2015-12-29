@@ -22,6 +22,7 @@ import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import org.apache.hadoop.classification.InterfaceAudience.Public;
@@ -31,6 +32,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.mapred.InputSplit;
 import org.apache.hadoop.util.ReflectionUtils;
+import org.apache.tez.dag.api.TezException;
 import org.apache.tez.dag.api.TezUncheckedException;
 
 /**
@@ -51,7 +53,16 @@ public class TezGroupedSplit implements InputSplit, Configurable {
   public TezGroupedSplit() {
     
   }
-  
+
+  public TezGroupedSplit(List<InputSplit> wrappedSplits, String wrappedInputFormatName,
+                         String[] locations, String rack, long length) {
+    this.wrappedSplits = wrappedSplits;
+    this.wrappedInputFormatName = wrappedInputFormatName;
+    this.locations = locations;
+    this.rack = rack;
+    this.length = length;
+  }
+
   public TezGroupedSplit(int numSplits, String wrappedInputFormatName,
       String[] locations, String rack) {
     this.wrappedSplits = new ArrayList<InputSplit>(numSplits);
@@ -106,10 +117,14 @@ public class TezGroupedSplit implements InputSplit, Configurable {
   public void readFields(DataInput in) throws IOException {
     wrappedInputFormatName = Text.readString(in);
     String inputSplitClassName = Text.readString(in);
-    Class<? extends InputSplit> clazz = 
-        (Class<? extends InputSplit>) 
-        TezGroupedSplitsInputFormat.getClassFromName(inputSplitClassName);
-    
+    Class<? extends InputSplit> clazz = null;
+    try {
+      clazz = (Class<? extends InputSplit>)
+      TezGroupedSplitsInputFormat.getClassFromName(inputSplitClassName);
+    } catch (TezException e) {
+      throw new IOException(e);
+    }
+
     int numSplits = in.readInt();
     
     wrappedSplits = new ArrayList<InputSplit>(numSplits);
@@ -169,5 +184,16 @@ public class TezGroupedSplit implements InputSplit, Configurable {
   
   public String getRack() {
     return rack;
+  }
+
+  @Override
+  public String toString() {
+    return "TezGroupedSplit{" +
+        "wrappedSplits=" + wrappedSplits +
+        ", wrappedInputFormatName='" + wrappedInputFormatName + '\'' +
+        ", locations=" + Arrays.toString(locations) +
+        ", rack='" + rack + '\'' +
+        ", length=" + length +
+        '}';
   }
 }

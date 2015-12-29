@@ -80,10 +80,44 @@
           <td>{{t 'common.time.duration'}}</td>
           <td>{{formatDuration startTime endTime}}</td>
         </tr>
+        <tr>
+          <td>Logs</td>
+              <td>
+            {{#each log in containerLogs}}
+              <a target="_blank" a href='{{unbound log.containerLog}}'>{{log.id}}</a>
+            {{else}}
+              <span class="message">Not Available!</span>
+            {{/each}}
+              </td>
+        </tr>
       </tbody>
     </table>
   </div>
 </div>
+
+{{#if data.content}}
+  <br/>
+  <h4>DAG Progress
+    {{#if progressDetails}}
+      ( Vertices {{progressDetails.completedVertices}}/{{data.length}} )
+      {{#if progressDetails.totalTasks}}
+        ( Tasks {{progressDetails.succeededTasks}}/{{progressDetails.totalTasks}} )
+      {{/if}}
+      :
+      {{progressStr}}
+    {{/if}}
+  </h4>
+  {{bs-progress-animated progressDecimal=progress}}
+
+  {{basic-table-component
+    columns=defaultColumnConfigs
+    rows=data.content
+    rowCount=data.content.length
+
+    enableStatus=false
+    enableSort=true
+  }}
+{{/if}}
 
 {{#if diagnostics}}
   <div class="margin-small-vertical">

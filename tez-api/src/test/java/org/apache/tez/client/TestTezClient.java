@@ -26,10 +26,17 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import javax.annotation.Nullable;
 
+import static org.junit.Assert.fail;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.Matchers.any;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -46,6 +53,10 @@ import org.apache.hadoop.yarn.api.records.URL;
 import org.apache.hadoop.yarn.api.records.YarnApplicationState;
 import org.apache.hadoop.yarn.client.api.YarnClient;
 import org.apache.hadoop.yarn.exceptions.YarnException;
+import org.apache.tez.common.counters.LimitExceededException;
+import org.apache.tez.common.counters.Limits;
+import org.apache.tez.common.counters.TezCounters;
+import org.apache.tez.common.security.HistoryACLPolicyManager;
 import org.apache.tez.dag.api.DAG;
 import org.apache.tez.dag.api.PreWarmVertex;
 import org.apache.tez.dag.api.ProcessorDescriptor;
@@ -61,6 +72,7 @@ import org.apache.tez.dag.api.client.rpc.DAGClientAMProtocolRPC.GetAMStatusRespo
 import org.apache.tez.dag.api.client.rpc.DAGClientAMProtocolRPC.ShutdownSessionRequestProto;
 import org.apache.tez.dag.api.client.rpc.DAGClientAMProtocolRPC.SubmitDAGRequestProto;
 import org.apache.tez.dag.api.client.rpc.DAGClientAMProtocolRPC.TezAppMasterStatusProto;
+import org.apache.tez.serviceplugins.api.ServicePluginsDescriptor;
 import org.hamcrest.CoreMatchers;
 import org.junit.Assert;
 import org.junit.Test;
@@ -70,6 +82,7 @@ import com.google.common.collect.Maps;
 import com.google.protobuf.RpcController;
 
 public class TestTezClient {
+  static final long HARD_KILL_TIMEOUT = 1500L;
 
   class TezClientForTest extends TezClient {
     TezYarnClient mockTezYarnClient;
@@ -99,12 +112,20 @@ public class TestTezClient {
     }
   }
   
-  TezClientForTest configure() throws YarnException, IOException, ServiceException {
-    return configure(new HashMap<String, LocalResource>(), true);
+  TezClientForTest configureAndCreateTezClient() throws YarnException, IOException, ServiceException {
+    return configureAndCreateTezClient(null);
+  }
+
+  TezClientForTest configureAndCreateTezClient(TezConfiguration conf) throws YarnException, ServiceException,
+      IOException {
+    return configureAndCreateTezClient(new HashMap<String, LocalResource>(), true, conf);
   }
   
-  TezClientForTest configure(Map<String, LocalResource> lrs, boolean isSession) throws YarnException, IOException, ServiceException {
-    TezConfiguration conf = new TezConfiguration();
+  TezClientForTest configureAndCreateTezClient(Map<String, LocalResource> lrs, boolean isSession,
+                                               TezConfiguration conf) throws YarnException, IOException, ServiceException {
+    if (conf == null) {
+      conf = new TezConfiguration();
+    }
     conf.setBoolean(TezConfiguration.TEZ_IGNORE_LIB_URIS, true);
     conf.setBoolean(TezConfiguration.TEZ_AM_SESSION_MODE, isSession);
     TezClientForTest client = new TezClientForTest("test", conf, lrs, null);
@@ -141,11 +162,13 @@ public class TestTezClient {
     lrs.put(lrName1, LocalResource.newInstance(URL.newInstance("file", "localhost", 0, "/test"),
         LocalResourceType.FILE, LocalResourceVisibility.PUBLIC, 1, 1));
     
-    TezClientForTest client = configure(lrs, isSession);
-    
+    TezClientForTest client = configureAndCreateTezClient(lrs, isSession, null);
+    HistoryACLPolicyManager mockAcl = mock(HistoryACLPolicyManager.class);
+
     ArgumentCaptor<ApplicationSubmissionContext> captor = ArgumentCaptor.forClass(ApplicationSubmissionContext.class);
     when(client.mockYarnClient.getApplicationReport(client.mockAppId).getYarnApplicationState())
     .thenReturn(YarnApplicationState.RUNNING);
+    client.setUpHistoryAclManager(mockAcl);
     client.start();
     verify(client.mockYarnClient, times(1)).init((Configuration)any());
     verify(client.mockYarnClient, times(1)).start();
@@ -153,11 +176,11 @@ public class TestTezClient {
       verify(client.mockYarnClient, times(1)).submitApplication(captor.capture());
       ApplicationSubmissionContext context = captor.getValue();
       Assert.assertEquals(3, context.getAMContainerSpec().getLocalResources().size());
-      Assert.assertTrue(context.getAMContainerSpec().getLocalResources().containsKey(
+      assertTrue(context.getAMContainerSpec().getLocalResources().containsKey(
           TezConstants.TEZ_AM_LOCAL_RESOURCES_PB_FILE_NAME));
-      Assert.assertTrue(context.getAMContainerSpec().getLocalResources().containsKey(
+      assertTrue(context.getAMContainerSpec().getLocalResources().containsKey(
           TezConstants.TEZ_PB_BINARY_CONF_NAME));
-      Assert.assertTrue(context.getAMContainerSpec().getLocalResources().containsKey(
+      assertTrue(context.getAMContainerSpec().getLocalResources().containsKey(
           lrName1));
     } else {
       verify(client.mockYarnClient, times(0)).submitApplication(captor.capture());
@@ -172,7 +195,7 @@ public class TestTezClient {
     DAG dag = DAG.create("DAG").addVertex(vertex).addTaskLocalFiles(lrDAG);
     DAGClient dagClient = client.submitDAG(dag);
         
-    Assert.assertTrue(dagClient.getExecutionContext().contains(client.mockAppId.toString()));
+    assertTrue(dagClient.getExecutionContext().contains(client.mockAppId.toString()));
     
     if (isSession) {
       verify(client.mockYarnClient, times(1)).submitApplication(captor.capture());
@@ -181,13 +204,13 @@ public class TestTezClient {
       verify(client.mockYarnClient, times(1)).submitApplication(captor.capture());
       ApplicationSubmissionContext context = captor.getValue();
       Assert.assertEquals(4, context.getAMContainerSpec().getLocalResources().size());
-      Assert.assertTrue(context.getAMContainerSpec().getLocalResources().containsKey(
+      assertTrue(context.getAMContainerSpec().getLocalResources().containsKey(
           TezConstants.TEZ_AM_LOCAL_RESOURCES_PB_FILE_NAME));
-      Assert.assertTrue(context.getAMContainerSpec().getLocalResources().containsKey(
+      assertTrue(context.getAMContainerSpec().getLocalResources().containsKey(
           TezConstants.TEZ_PB_BINARY_CONF_NAME));
-      Assert.assertTrue(context.getAMContainerSpec().getLocalResources().containsKey(
+      assertTrue(context.getAMContainerSpec().getLocalResources().containsKey(
           TezConstants.TEZ_PB_PLAN_BINARY_NAME));
-      Assert.assertTrue(context.getAMContainerSpec().getLocalResources().containsKey(
+      assertTrue(context.getAMContainerSpec().getLocalResources().containsKey(
           lrName1));
     }
     
@@ -211,7 +234,7 @@ public class TestTezClient {
     if (isSession) {
       // same app master
       verify(client.mockYarnClient, times(1)).submitApplication(captor.capture());
-      Assert.assertTrue(dagClient.getExecutionContext().contains(client.mockAppId.toString()));
+      assertTrue(dagClient.getExecutionContext().contains(client.mockAppId.toString()));
       // additional resource is sent
       ArgumentCaptor<SubmitDAGRequestProto> captor1 = ArgumentCaptor.forClass(SubmitDAGRequestProto.class);
       verify(client.sessionAmProxy, times(2)).submitDAG((RpcController)any(), captor1.capture());
@@ -220,20 +243,20 @@ public class TestTezClient {
       Assert.assertEquals(lrName2, proto.getAdditionalAmResources().getLocalResources(0).getName());
     } else {
       // new app master
-      Assert.assertTrue(dagClient.getExecutionContext().contains(appId2.toString()));
+      assertTrue(dagClient.getExecutionContext().contains(appId2.toString()));
       verify(client.mockYarnClient, times(2)).submitApplication(captor.capture());
       // additional resource is added
       ApplicationSubmissionContext context = captor.getValue();
       Assert.assertEquals(5, context.getAMContainerSpec().getLocalResources().size());
-      Assert.assertTrue(context.getAMContainerSpec().getLocalResources().containsKey(
+      assertTrue(context.getAMContainerSpec().getLocalResources().containsKey(
           TezConstants.TEZ_AM_LOCAL_RESOURCES_PB_FILE_NAME));
-      Assert.assertTrue(context.getAMContainerSpec().getLocalResources().containsKey(
+      assertTrue(context.getAMContainerSpec().getLocalResources().containsKey(
           TezConstants.TEZ_PB_BINARY_CONF_NAME));
-      Assert.assertTrue(context.getAMContainerSpec().getLocalResources().containsKey(
+      assertTrue(context.getAMContainerSpec().getLocalResources().containsKey(
           TezConstants.TEZ_PB_PLAN_BINARY_NAME));
-      Assert.assertTrue(context.getAMContainerSpec().getLocalResources().containsKey(
+      assertTrue(context.getAMContainerSpec().getLocalResources().containsKey(
           lrName1));
-      Assert.assertTrue(context.getAMContainerSpec().getLocalResources().containsKey(
+      assertTrue(context.getAMContainerSpec().getLocalResources().containsKey(
           lrName2));
     }
     
@@ -243,11 +266,12 @@ public class TestTezClient {
           (ShutdownSessionRequestProto) any());
     }
     verify(client.mockYarnClient, times(1)).stop();
+    verify(mockAcl, times(1)).close();
   }
   
   @Test (timeout=5000)
   public void testPreWarm() throws Exception {
-    TezClientForTest client = configure();
+    TezClientForTest client = configureAndCreateTezClient();
     client.start();
 
     when(client.mockYarnClient.getApplicationReport(client.mockAppId).getYarnApplicationState())
@@ -263,7 +287,7 @@ public class TestTezClient {
     ArgumentCaptor<SubmitDAGRequestProto> captor1 = ArgumentCaptor.forClass(SubmitDAGRequestProto.class);
     verify(client.sessionAmProxy, times(1)).submitDAG((RpcController)any(), captor1.capture());
     SubmitDAGRequestProto proto = captor1.getValue();
-    Assert.assertTrue(proto.getDAGPlan().getName().startsWith(TezConstants.TEZ_PREWARM_DAG_NAME_PREFIX));
+    assertTrue(proto.getDAGPlan().getName().startsWith(TezConstants.TEZ_PREWARM_DAG_NAME_PREFIX));
 
     client.stop();
   }
@@ -275,7 +299,8 @@ public class TestTezClient {
   }
   
   public void testMultipleSubmissionsJob(boolean isSession) throws Exception {
-    TezClientForTest client1 = configure(new HashMap<String, LocalResource>(), isSession);
+    TezClientForTest client1 = configureAndCreateTezClient(new HashMap<String, LocalResource>(),
+        isSession, null);
     when(client1.mockYarnClient.getApplicationReport(client1.mockAppId).getYarnApplicationState())
     .thenReturn(YarnApplicationState.RUNNING);
     client1.start();
@@ -295,7 +320,7 @@ public class TestTezClient {
     // the dag resource will be added to the vertex once
     client1.submitDAG(dag);
     
-    TezClientForTest client2 = configure();
+    TezClientForTest client2 = configureAndCreateTezClient();
     when(client2.mockYarnClient.getApplicationReport(client2.mockAppId).getYarnApplicationState())
     .thenReturn(YarnApplicationState.RUNNING);
     client2.start();
@@ -310,7 +335,7 @@ public class TestTezClient {
   
   @Test(timeout = 5000)
   public void testWaitTillReady_Interrupt() throws Exception {
-    final TezClientForTest client = configure();
+    final TezClientForTest client = configureAndCreateTezClient();
     client.start();
 
     when(client.mockYarnClient.getApplicationReport(client.mockAppId).getYarnApplicationState())
@@ -330,13 +355,13 @@ public class TestTezClient {
     thread.join(250);
     thread.interrupt();
     thread.join();
-    Assert.assertThat(exceptionReference.get(),CoreMatchers. instanceOf(InterruptedException.class));
+    Assert.assertThat(exceptionReference.get(), CoreMatchers.instanceOf(InterruptedException.class));
     client.stop();
   }
   
   @Test(timeout = 5000)
   public void testWaitTillReadyAppFailed() throws Exception {
-    final TezClientForTest client = configure();
+    final TezClientForTest client = configureAndCreateTezClient();
     client.start();
     String msg = "Application Test Failed";
     when(client.mockYarnClient.getApplicationReport(client.mockAppId).getYarnApplicationState())
@@ -345,31 +370,31 @@ public class TestTezClient {
         msg);
     try {
       client.waitTillReady();
-      Assert.fail();
+      fail();
     } catch (SessionNotRunning e) {
-      Assert.assertTrue(e.getMessage().contains(msg));
+      assertTrue(e.getMessage().contains(msg));
     }
     client.stop();
   }
   
   @Test(timeout = 5000)
   public void testWaitTillReadyAppFailedNoDiagnostics() throws Exception {
-    final TezClientForTest client = configure();
+    final TezClientForTest client = configureAndCreateTezClient();
     client.start();
     when(client.mockYarnClient.getApplicationReport(client.mockAppId).getYarnApplicationState())
         .thenReturn(YarnApplicationState.NEW).thenReturn(YarnApplicationState.FAILED);
     try {
       client.waitTillReady();
-      Assert.fail();
+      fail();
     } catch (SessionNotRunning e) {
-      Assert.assertTrue(e.getMessage().contains(TezClient.NO_CLUSTER_DIAGNOSTICS_MSG));
+      assertTrue(e.getMessage().contains(TezClient.NO_CLUSTER_DIAGNOSTICS_MSG));
     }
     client.stop();
   }
   
   @Test(timeout = 5000)
   public void testSubmitDAGAppFailed() throws Exception {
-    final TezClientForTest client = configure();
+    final TezClientForTest client = configureAndCreateTezClient();
     client.start();
     
     client.callRealGetSessionAMProxy = true;
@@ -385,11 +410,160 @@ public class TestTezClient {
     
     try {
       client.submitDAG(dag);
-      Assert.fail();
+      fail();
     } catch (SessionNotRunning e) {
-      Assert.assertTrue(e.getMessage().contains(msg));
+      assertTrue(e.getMessage().contains(msg));
     }
     client.stop();
   }
 
+  @Test(timeout = 5000)
+  public void testTezClientCounterLimits() throws YarnException, IOException, ServiceException {
+    Limits.reset();
+    int defaultCounterLimit = TezConfiguration.TEZ_COUNTERS_MAX_DEFAULT;
+
+    int newCounterLimit = defaultCounterLimit + 500;
+
+    TezConfiguration conf = new TezConfiguration();
+    conf.setInt(TezConfiguration.TEZ_COUNTERS_MAX, newCounterLimit);
+
+    configureAndCreateTezClient(conf);
+
+    TezCounters counters = new TezCounters();
+    for (int i = 0 ; i < newCounterLimit ; i++) {
+      counters.findCounter("GroupName", "TestCounter" + i).setValue(i);
+    }
+
+    try {
+      counters.findCounter("GroupName", "TestCounterFail").setValue(1);
+      fail("Expecting a LimitExceedException - too many counters");
+    } catch (LimitExceededException e) {
+    }
+  }
+
+  @Test(timeout = 5000)
+  public void testClientBuilder() {
+    TezConfiguration tezConfWitSession = new TezConfiguration();
+    tezConfWitSession.setBoolean(TezConfiguration.TEZ_AM_SESSION_MODE, true);
+
+    TezConfiguration tezConfNoSession = new TezConfiguration();
+    tezConfNoSession.setBoolean(TezConfiguration.TEZ_AM_SESSION_MODE, false);
+
+    AMConfiguration amConf;
+    TezClient tezClient;
+    Credentials credentials = new Credentials();
+    Map<String, LocalResource> localResourceMap = new HashMap<>();
+    localResourceMap.put("testResource", mock(LocalResource.class));
+    ServicePluginsDescriptor servicePluginsDescriptor = ServicePluginsDescriptor.create(true);
+
+    // Session mode via conf
+    tezClient = TezClient.newBuilder("client", tezConfWitSession).build();
+    assertTrue(tezClient.isSession);
+    assertNull(tezClient.servicePluginsDescriptor);
+    assertNotNull(tezClient.apiVersionInfo);
+    amConf = tezClient.amConfig;
+    assertNotNull(amConf);
+    assertEquals(0, amConf.getAMLocalResources().size());
+    assertNull(amConf.getCredentials());
+    assertTrue(
+        amConf.getTezConfiguration().getBoolean(TezConfiguration.TEZ_AM_SESSION_MODE, false));
+
+    // Non-Session mode via conf
+    tezClient = TezClient.newBuilder("client", tezConfNoSession).build();
+    assertFalse(tezClient.isSession);
+    assertNull(tezClient.servicePluginsDescriptor);
+    assertNotNull(tezClient.apiVersionInfo);
+    amConf = tezClient.amConfig;
+    assertNotNull(amConf);
+    assertEquals(0, amConf.getAMLocalResources().size());
+    assertNull(amConf.getCredentials());
+    assertFalse(
+        amConf.getTezConfiguration().getBoolean(TezConfiguration.TEZ_AM_SESSION_MODE, true));
+
+    // no-session via config. API explicit session.
+    tezClient = TezClient.newBuilder("client", tezConfNoSession).setIsSession(true).build();
+    assertTrue(tezClient.isSession);
+    assertNull(tezClient.servicePluginsDescriptor);
+    assertNotNull(tezClient.apiVersionInfo);
+    amConf = tezClient.amConfig;
+    assertNotNull(amConf);
+    assertEquals(0, amConf.getAMLocalResources().size());
+    assertNull(amConf.getCredentials());
+    assertTrue(
+        amConf.getTezConfiguration().getBoolean(TezConfiguration.TEZ_AM_SESSION_MODE, false));
+
+    // Plugins, credentials, local resources
+    tezClient = TezClient.newBuilder("client", tezConfWitSession).setCredentials(credentials)
+        .setLocalResources(localResourceMap).setServicePluginDescriptor(servicePluginsDescriptor)
+        .build();
+    assertTrue(tezClient.isSession);
+    assertEquals(servicePluginsDescriptor, tezClient.servicePluginsDescriptor);
+    assertNotNull(tezClient.apiVersionInfo);
+    amConf = tezClient.amConfig;
+    assertNotNull(amConf);
+    assertEquals(1, amConf.getAMLocalResources().size());
+    assertEquals(localResourceMap, amConf.getAMLocalResources());
+    assertEquals(credentials, amConf.getCredentials());
+    assertTrue(
+        amConf.getTezConfiguration().getBoolean(TezConfiguration.TEZ_AM_SESSION_MODE, false));
+  }
+
+  public static class InvalidChecker {
+    // No-op class
+  }
+
+  @Test(timeout = 5000)
+  public void testInvalidJavaOptsChecker1() throws YarnException, IOException, ServiceException,
+      TezException {
+    TezConfiguration conf = new TezConfiguration();
+    conf.set(TezConfiguration.TEZ_CLIENT_JAVA_OPTS_CHECKER_CLASS, "InvalidClassName");
+    TezClientForTest client = configureAndCreateTezClient(conf);
+    client.start();
+  }
+
+  @Test(timeout = 5000)
+  public void testInvalidJavaOptsChecker2() throws YarnException, IOException, ServiceException,
+      TezException {
+    TezConfiguration conf = new TezConfiguration();
+    conf.set(TezConfiguration.TEZ_CLIENT_JAVA_OPTS_CHECKER_CLASS, InvalidChecker.class.getName());
+    TezClientForTest client = configureAndCreateTezClient(conf);
+    client.start();
+  }
+
+  @Test(timeout = 5000)
+  public void testStopRetriesUntilTerminalState() throws Exception {
+    TezConfiguration conf = new TezConfiguration();
+    conf.setBoolean(TezConfiguration.TEZ_CLIENT_ASYNCHRONOUS_STOP, false);
+    conf.setLong(TezConfiguration.TEZ_CLIENT_HARD_KILL_TIMEOUT_MS, HARD_KILL_TIMEOUT);
+    final TezClientForTest client = configureAndCreateTezClient(conf);
+    client.start();
+    when(client.mockYarnClient.getApplicationReport(client.mockAppId).getYarnApplicationState())
+        .thenReturn(YarnApplicationState.NEW).thenReturn(YarnApplicationState.KILLED);
+    try {
+      client.stop();
+    } catch (Exception e) {
+      Assert.fail("Expected ApplicationNotFoundException");
+    }
+    verify(client.mockYarnClient, atLeast(2)).getApplicationReport(client.mockAppId);
+  }
+
+  @Test(timeout = 20000)
+  public void testStopRetriesUntilTimeout() throws Exception {
+    TezConfiguration conf = new TezConfiguration();
+    conf.setBoolean(TezConfiguration.TEZ_CLIENT_ASYNCHRONOUS_STOP, false);
+    conf.setLong(TezConfiguration.TEZ_CLIENT_HARD_KILL_TIMEOUT_MS, HARD_KILL_TIMEOUT);
+    final TezClientForTest client = configureAndCreateTezClient(conf);
+    client.start();
+    when(client.mockYarnClient.getApplicationReport(client.mockAppId).getYarnApplicationState())
+        .thenReturn(YarnApplicationState.RUNNING);
+    long start = System.currentTimeMillis();
+    try {
+      client.stop();
+    } catch (Exception e) {
+      Assert.fail("Stop should complete without exception: " + e);
+    }
+    long end = System.currentTimeMillis();
+    verify(client.mockYarnClient, atLeast(2)).getApplicationReport(client.mockAppId);
+    Assert.assertTrue("Stop ended before timeout", end - start > HARD_KILL_TIMEOUT);
+  }
 }

@@ -121,15 +121,14 @@ public class ATSImportTool extends Configured implements Tool {
   private final String baseUri;
   private final String dagId;
 
-  private final File downloadDir;
   private final File zipFile;
   private final Client httpClient;
+  private final TezDAGID tezDAGID;
 
-  public ATSImportTool(String baseUri, String dagId, File baseDownloadDir, int batchSize)
-      throws TezException {
+  public ATSImportTool(String baseUri, String dagId, File downloadDir, int batchSize) {
     Preconditions.checkArgument(!Strings.isNullOrEmpty(dagId), "dagId can not be null or empty");
-    Preconditions.checkArgument(baseDownloadDir != null, "downloadDir can not be null");
-    Preconditions.checkArgument(TezDAGID.fromString(dagId) != null, "Not a valid DAG ID " + dagId);
+    Preconditions.checkArgument(downloadDir != null, "downloadDir can not be null");
+    tezDAGID = TezDAGID.fromString(dagId);
 
     this.baseUri = baseUri;
     this.batchSize = batchSize;
@@ -137,7 +136,6 @@ public class ATSImportTool extends Configured implements Tool {
 
     this.httpClient = getHttpClient();
 
-    this.downloadDir = new File(baseDownloadDir, dagId);
     this.zipFile = new File(downloadDir, this.dagId + ".zip");
 
     boolean result = downloadDir.mkdirs();
@@ -185,7 +183,7 @@ public class ATSImportTool extends Configured implements Tool {
     JSONObject finalJson = new JSONObject();
 
     //Download application details (TEZ_VERSION etc)
-    String tezAppId = "tez_" + (TezDAGID.fromString(dagId)).getApplicationId().toString();
+    String tezAppId = "tez_" + tezDAGID.getApplicationId().toString();
     String tezAppUrl = String.format("%s/%s/%s", baseUri, Constants.TEZ_APPLICATION, tezAppId);
     JSONObject tezAppJson = getJsonRootEntity(tezAppUrl);
     finalJson.put(Constants.APPLICATION, tezAppJson);
@@ -267,8 +265,7 @@ public class ATSImportTool extends Configured implements Tool {
     }
   }
 
-  private String logErrorMessage(ClientResponse response) throws IOException {
-    StringBuilder sb = new StringBuilder();
+  private void logErrorMessage(ClientResponse response) throws IOException {
     LOG.error("Response status={}", response.getClientResponseStatus().toString());
     LineIterator it = null;
     try {
@@ -282,7 +279,6 @@ public class ATSImportTool extends Configured implements Tool {
         it.close();
       }
     }
-    return sb.toString();
   }
 
   //For secure cluster, this should work as long as valid ticket is available in the node.
@@ -432,9 +428,8 @@ public class ATSImportTool extends Configured implements Tool {
   }
 
   @VisibleForTesting
-  static int process(String[] args) {
+  public static int process(String[] args) throws Exception {
     Options options = buildOptions();
-    int result = -1;
     try {
       Configuration conf = new Configuration();
       CommandLine cmdLine = new GnuParser().parse(options, args);
@@ -448,21 +443,15 @@ public class ATSImportTool extends Configured implements Tool {
       int batchSize = (cmdLine.hasOption(BATCH_SIZE)) ?
           (Integer.parseInt(cmdLine.getOptionValue(BATCH_SIZE))) : BATCH_SIZE_DEFAULT;
 
-      result = ToolRunner.run(conf, new ATSImportTool(baseTimelineURL, dagId,
+      return ToolRunner.run(conf, new ATSImportTool(baseTimelineURL, dagId,
           downloadDir, batchSize), args);
-
-      return result;
-    } catch (MissingOptionException missingOptionException) {
-      LOG.error("Error in parsing options ", missingOptionException);
-      printHelp(options);
     } catch (ParseException e) {
       LOG.error("Error in parsing options ", e);
       printHelp(options);
+      throw e;
     } catch (Exception e) {
       LOG.error("Error in processing ", e);
       throw e;
-    } finally {
-      return result;
     }
   }
 

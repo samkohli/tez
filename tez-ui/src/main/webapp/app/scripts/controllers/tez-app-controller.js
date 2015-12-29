@@ -16,16 +16,57 @@
  * limitations under the License.
  */
 
-App.TezAppController = Em.ObjectController.extend(App.Helpers.DisplayHelper, App.ModelRefreshMixin, {
+App.TezAppController = App.BaseController.extend(App.Helpers.DisplayHelper, App.ModelRefreshMixin, {
   controllerName: 'AppController',
 
   pageTitle: 'App',
+  persistConfigs: false,
+  pollingEnabled: true,
 
   loading: true,
 
   updateLoading: function() {
     this.set('loading', false);
   }.observes('content'),
+
+  pollster: App.Helpers.Pollster.create(),
+
+  init: function () {
+    this._super();
+    this.get('pollster').setProperties({
+      onPoll: this.load.bind(this)
+    });
+  },
+
+  pollsterControl: function () {
+    if(this.get('appDetail.finalStatus') == 'UNDEFINED' &&
+        this.get('pollingEnabled') &&
+        this.get('isActive')) {
+      this.get('pollster').start();
+    }
+    else {
+      this.get('pollster').stop();
+    }
+  }.observes('appDetail.finalStatus', 'isActive', 'pollingEnabled'),
+
+  load: function () {
+    var tezApp = this.get('content'),
+        store  = this.get('store');
+
+      tezApp.reload().then(function (tezApp) {
+        var appId = tezApp.get('appId');
+        if(!appId) return tezApp;
+        return App.Helpers.misc.loadApp(store, appId).then(function (appDetails){
+          tezApp.set('appDetail', appDetails);
+          return tezApp;
+        });
+      }).catch(function (error) {
+        Em.Logger.error(error);
+        var err = App.Helpers.misc.formatError(error);
+        var msg = 'error code: %@, message: %@'.fmt(err.errCode, err.msg);
+        App.Helpers.ErrorBar.getInstance().show(msg, err.details);
+      });
+  },
 
   childDisplayViews: [
     Ember.Object.create({title: 'App Details', linkTo: 'tez-app.index'}),

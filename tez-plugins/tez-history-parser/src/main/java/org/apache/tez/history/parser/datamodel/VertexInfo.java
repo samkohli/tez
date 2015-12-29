@@ -27,10 +27,13 @@ import com.google.common.collect.Maps;
 import com.google.common.collect.Multimap;
 import com.google.common.collect.Multimaps;
 import com.google.common.collect.Ordering;
+
+import org.apache.hadoop.util.StringInterner;
 import org.apache.tez.dag.api.oldrecords.TaskState;
 import org.codehaus.jettison.json.JSONException;
 import org.codehaus.jettison.json.JSONObject;
 
+import javax.annotation.Nullable;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
@@ -43,9 +46,14 @@ import static org.apache.hadoop.classification.InterfaceStability.Evolving;
 @Evolving
 public class VertexInfo extends BaseInfo {
 
+  private final String vertexId;
   private final String vertexName;
-  private final long endTime;
+  private final long finishTime;
   private final long initTime;
+  private final long initRequestedTime;
+  private final long startTime;
+  private final long startRequestedTime;
+  
   private final String diagnostics;
   private final String processorClass;
 
@@ -58,8 +66,6 @@ public class VertexInfo extends BaseInfo {
 
   private final String status;
 
-  private final long startTime;
-
   //TaskID --> TaskInfo for internal reference
   private Map<String, TaskInfo> taskInfoMap;
 
@@ -68,6 +74,8 @@ public class VertexInfo extends BaseInfo {
 
   private final List<AdditionalInputOutputDetails> additionalInputInfoList;
   private final List<AdditionalInputOutputDetails> additionalOutputInfoList;
+  
+  private long avgPostDataExecutionTimeInterval = -1;
 
   private DagInfo dagInfo;
 
@@ -78,6 +86,7 @@ public class VertexInfo extends BaseInfo {
         jsonObject.getString(Constants.ENTITY_TYPE).equalsIgnoreCase
             (Constants.TEZ_VERTEX_ID));
 
+    vertexId = StringInterner.weakIntern(jsonObject.optString(Constants.ENTITY));
     taskInfoMap = Maps.newHashMap();
 
     inEdgeList = Lists.newLinkedList();
@@ -87,9 +96,11 @@ public class VertexInfo extends BaseInfo {
 
     //Parse additional Info
     JSONObject otherInfoNode = jsonObject.getJSONObject(Constants.OTHER_INFO);
+    initRequestedTime = otherInfoNode.optLong(Constants.INIT_REQUESTED_TIME);
+    startRequestedTime = otherInfoNode.optLong(Constants.START_REQUESTED_TIME);
     startTime = otherInfoNode.optLong(Constants.START_TIME);
     initTime = otherInfoNode.optLong(Constants.INIT_TIME);
-    endTime = otherInfoNode.optLong(Constants.FINISH_TIME);
+    finishTime = otherInfoNode.optLong(Constants.FINISH_TIME);
     diagnostics = otherInfoNode.optString(Constants.DIAGNOSTICS);
     numTasks = otherInfoNode.optInt(Constants.NUM_TASKS);
     failedTasks = otherInfoNode.optInt(Constants.NUM_FAILED_TASKS);
@@ -100,9 +111,9 @@ public class VertexInfo extends BaseInfo {
     killedTasks = otherInfoNode.optInt(Constants.NUM_KILLED_TASKS);
     numFailedTaskAttempts =
         otherInfoNode.optInt(Constants.NUM_FAILED_TASKS_ATTEMPTS);
-    vertexName = otherInfoNode.optString(Constants.VERTEX_NAME);
-    processorClass = otherInfoNode.optString(Constants.PROCESSOR_CLASS_NAME);
-    status = otherInfoNode.optString(Constants.STATUS);
+    vertexName = StringInterner.weakIntern(otherInfoNode.optString(Constants.VERTEX_NAME));
+    processorClass = StringInterner.weakIntern(otherInfoNode.optString(Constants.PROCESSOR_CLASS_NAME));
+    status = StringInterner.weakIntern(otherInfoNode.optString(Constants.STATUS));
   }
 
   public static VertexInfo create(JSONObject vertexInfoObject) throws
@@ -134,7 +145,7 @@ public class VertexInfo extends BaseInfo {
     this.additionalInputInfoList.clear();
     this.additionalInputInfoList.addAll(additionalInputInfoList);
   }
-
+  
   void setAdditionalOutputInfoList(List<AdditionalInputOutputDetails> additionalOutputInfoList) {
     this.additionalOutputInfoList.clear();
     this.additionalOutputInfoList.addAll(additionalOutputInfoList);
@@ -156,42 +167,84 @@ public class VertexInfo extends BaseInfo {
     updateEdgeInfo();
   }
 
+  public List<AdditionalInputOutputDetails> getAdditionalInputInfoList() {
+    return Collections.unmodifiableList(additionalInputInfoList);
+  }
+
+  public List<AdditionalInputOutputDetails> getAdditionalOutputInfoList() {
+    return Collections.unmodifiableList(additionalOutputInfoList);
+  }
+
   @Override
-  public final long getStartTime() {
-    return startTime - (dagInfo.getAbsStartTime());
+  public final long getStartTimeInterval() {
+    return startTime - (dagInfo.getStartTime());
   }
 
-  public final long getFirstTaskStartTime() {
-    return getFirstTaskToStart().getStartTime();
-  }
-
-  public final long getLastTaskFinishTime() {
-    if (getLastTaskToFinish() == null || getLastTaskToFinish().getFinishTime() < 0) {
-        return dagInfo.getFinishTime();
+  public final long getFirstTaskStartTimeInterval() {
+    TaskInfo firstTask = getFirstTaskToStart();
+    if (firstTask == null) {
+      return 0;
     }
-    return getLastTaskToFinish().getFinishTime();
+    return firstTask.getStartTimeInterval();
   }
 
-  public final long getAbsStartTime() {
+  public final long getLastTaskFinishTimeInterval() {
+    if (getLastTaskToFinish() == null || getLastTaskToFinish().getFinishTimeInterval() < 0) {
+        return dagInfo.getFinishTimeInterval();
+    }
+    return getLastTaskToFinish().getFinishTimeInterval();
+  }
+  
+  public final long getAvgPostDataExecutionTimeInterval() {
+    if (avgPostDataExecutionTimeInterval == -1) {
+      long totalExecutionTime = 0;
+      long totalAttempts = 0;
+      for (TaskInfo task : getTasks()) {
+        TaskAttemptInfo attempt = task.getSuccessfulTaskAttempt();
+        if (attempt != null) {
+          // count only time after last data was received
+          long execTime = attempt.getPostDataExecutionTimeInterval();
+          if (execTime >= 0) {
+            totalExecutionTime += execTime;
+            totalAttempts++;
+          }
+        }
+      }
+      if (totalAttempts > 0) {
+        avgPostDataExecutionTimeInterval = Math.round(totalExecutionTime*1.0/totalAttempts);
+      }
+    }
+    return avgPostDataExecutionTimeInterval;
+  }
+
+  public final long getStartTime() {
     return startTime;
   }
 
-  public final long getAbsFinishTime() {
-    return endTime;
+  public final long getFinishTime() {
+    return finishTime;
   }
 
-  public final long getAbsoluteInitTime() {
+  public final long getInitTime() {
     return initTime;
   }
+  
+  public final long getInitRequestedTime() {
+    return initRequestedTime;
+  }
 
+  public final long getStartRequestedTime() {
+    return startRequestedTime;
+  }
+  
   @Override
-  public final long getFinishTime() {
-    long vertexEndTime = endTime - (dagInfo.getAbsStartTime());
+  public final long getFinishTimeInterval() {
+    long vertexEndTime = finishTime - (dagInfo.getStartTime());
     if (vertexEndTime < 0) {
       //probably vertex is not complete or failed in middle. get the last task attempt time
       for (TaskInfo taskInfo : getTasks()) {
-        vertexEndTime = (taskInfo.getFinishTime() > vertexEndTime)
-            ? taskInfo.getFinishTime() : vertexEndTime;
+        vertexEndTime = (taskInfo.getFinishTimeInterval() > vertexEndTime)
+            ? taskInfo.getFinishTimeInterval() : vertexEndTime;
       }
     }
     return vertexEndTime;
@@ -205,20 +258,24 @@ public class VertexInfo extends BaseInfo {
   public final String getVertexName() {
     return vertexName;
   }
+  
+  public final String getVertexId() {
+    return vertexId;
+  }
 
   //Quite possible that getFinishTime is not yet recorded for failed vertices (or killed vertices)
   //Start time of vertex infers that the dependencies are done and AM has inited it.
   public final long getTimeTaken() {
-    return (getFinishTime() - getStartTime());
+    return (getFinishTimeInterval() - getStartTimeInterval());
   }
 
   //Time taken for last task to finish  - time taken for first task to start
   public final long getTimeTakenForTasks() {
-    return (getLastTaskFinishTime() - getFirstTaskStartTime());
+    return (getLastTaskFinishTimeInterval() - getFirstTaskStartTimeInterval());
   }
 
-  public final long getInitTime() {
-    return initTime - dagInfo.getAbsStartTime();
+  public final long getInitTimeInterval() {
+    return initTime - dagInfo.getStartTime();
   }
 
   public final int getNumTasks() {
@@ -250,14 +307,32 @@ public class VertexInfo extends BaseInfo {
 
   }
 
+
+  private List<TaskInfo> getTasksInternal() {
+    return Lists.newLinkedList(taskInfoMap.values());
+  }
+
   /**
    * Get all tasks
    *
    * @return list of taskInfo
    */
   public final List<TaskInfo> getTasks() {
-    List<TaskInfo> taskInfoList = Lists.newLinkedList(taskInfoMap.values());
-    Collections.sort(taskInfoList, orderingOnStartTime());
+    return Collections.unmodifiableList(getTasksInternal());
+  }
+
+  /**
+   * Get all tasks in sorted order
+   *
+   * @param sorted
+   * @param ordering
+   * @return list of TaskInfo
+   */
+  public final List<TaskInfo> getTasks(boolean sorted, @Nullable Ordering<TaskInfo> ordering) {
+    List<TaskInfo> taskInfoList = getTasksInternal();
+    if (sorted) {
+      Collections.sort(taskInfoList, ((ordering == null) ? orderingOnStartTime() : ordering));
+    }
     return Collections.unmodifiableList(taskInfoList);
   }
 
@@ -332,12 +407,37 @@ public class VertexInfo extends BaseInfo {
     return Collections.unmodifiableList(outputVertices);
   }
 
-  public List<TaskAttemptInfo> getTaskAttempts() {
+  // expensive method to call for large DAGs as it creates big lists on every call
+  private List<TaskAttemptInfo> getTaskAttemptsInternal() {
     List<TaskAttemptInfo> taskAttemptInfos = Lists.newLinkedList();
     for (TaskInfo taskInfo : getTasks()) {
       taskAttemptInfos.addAll(taskInfo.getTaskAttempts());
     }
-    Collections.sort(taskAttemptInfos, orderingOnAttemptStartTime());
+    return taskAttemptInfos;
+  }
+
+  /**
+   * Get all task attempts
+   *
+   * @return List<TaskAttemptInfo> list of attempts
+   */
+  public List<TaskAttemptInfo> getTaskAttempts() {
+    return Collections.unmodifiableList(getTaskAttemptsInternal());
+  }
+
+  /**
+   * Get all task attempts in sorted order
+   *
+   * @param sorted
+   * @param ordering
+   * @return list of TaskAttemptInfo
+   */
+  public final List<TaskAttemptInfo> getTaskAttempts(boolean sorted,
+      @Nullable Ordering<TaskAttemptInfo> ordering) {
+    List<TaskAttemptInfo> taskAttemptInfos = getTaskAttemptsInternal();
+    if (sorted) {
+      Collections.sort(taskAttemptInfos, ((ordering == null) ? orderingOnAttemptStartTime() : ordering));
+    }
     return Collections.unmodifiableList(taskAttemptInfos);
   }
 
@@ -383,8 +483,8 @@ public class VertexInfo extends BaseInfo {
     }
     Collections.sort(taskInfoList, new Comparator<TaskInfo>() {
       @Override public int compare(TaskInfo o1, TaskInfo o2) {
-        return (o1.getStartTime() < o2.getStartTime()) ? -1 :
-            ((o1.getStartTime() == o2.getStartTime()) ?
+        return (o1.getStartTimeInterval() < o2.getStartTimeInterval()) ? -1 :
+            ((o1.getStartTimeInterval() == o2.getStartTimeInterval()) ?
                 0 : 1);
       }
     });
@@ -403,8 +503,8 @@ public class VertexInfo extends BaseInfo {
     }
     Collections.sort(taskInfoList, new Comparator<TaskInfo>() {
       @Override public int compare(TaskInfo o1, TaskInfo o2) {
-        return (o1.getFinishTime() > o2.getFinishTime()) ? -1 :
-            ((o1.getStartTime() == o2.getStartTime()) ?
+        return (o1.getFinishTimeInterval() > o2.getFinishTimeInterval()) ? -1 :
+            ((o1.getStartTimeInterval() == o2.getStartTimeInterval()) ?
                 0 : 1);
       }
     });
@@ -460,8 +560,8 @@ public class VertexInfo extends BaseInfo {
   private Ordering<TaskInfo> orderingOnStartTime() {
     return Ordering.from(new Comparator<TaskInfo>() {
       @Override public int compare(TaskInfo o1, TaskInfo o2) {
-        return (o1.getStartTime() < o2.getStartTime()) ? -1 :
-            ((o1.getStartTime() == o2.getStartTime()) ? 0 : 1);
+        return (o1.getStartTimeInterval() < o2.getStartTimeInterval()) ? -1 :
+            ((o1.getStartTimeInterval() == o2.getStartTimeInterval()) ? 0 : 1);
       }
     });
   }
@@ -469,8 +569,8 @@ public class VertexInfo extends BaseInfo {
   private Ordering<TaskAttemptInfo> orderingOnAttemptStartTime() {
     return Ordering.from(new Comparator<TaskAttemptInfo>() {
       @Override public int compare(TaskAttemptInfo o1, TaskAttemptInfo o2) {
-        return (o1.getStartTime() < o2.getStartTime()) ? -1 :
-            ((o1.getStartTime() == o2.getStartTime()) ? 0 : 1);
+        return (o1.getStartTimeInterval() < o2.getStartTimeInterval()) ? -1 :
+            ((o1.getStartTimeInterval() == o2.getStartTimeInterval()) ? 0 : 1);
       }
     });
   }
@@ -516,9 +616,9 @@ public class VertexInfo extends BaseInfo {
     sb.append("[");
     sb.append("vertexName=").append(getVertexName()).append(", ");
     sb.append("events=").append(getEvents()).append(", ");
-    sb.append("initTime=").append(getInitTime()).append(", ");
-    sb.append("startTime=").append(getStartTime()).append(", ");
-    sb.append("endTime=").append(getFinishTime()).append(", ");
+    sb.append("initTime=").append(getInitTimeInterval()).append(", ");
+    sb.append("startTime=").append(getStartTimeInterval()).append(", ");
+    sb.append("endTime=").append(getFinishTimeInterval()).append(", ");
     sb.append("timeTaken=").append(getTimeTaken()).append(", ");
     sb.append("diagnostics=").append(getDiagnostics()).append(", ");
     sb.append("numTasks=").append(getNumTasks()).append(", ");

@@ -24,9 +24,9 @@ public class AMSchedulerEventNodeBlacklistUpdate extends AMSchedulerEvent {
 
   private final NodeId nodeId;
 
-  public AMSchedulerEventNodeBlacklistUpdate(NodeId nodeId, boolean add) {
+  public AMSchedulerEventNodeBlacklistUpdate(NodeId nodeId, boolean add, int schedulerId) {
     super((add ? AMSchedulerEventType.S_NODE_BLACKLISTED
-        : AMSchedulerEventType.S_NODE_UNBLACKLISTED));
+        : AMSchedulerEventType.S_NODE_UNBLACKLISTED), schedulerId);
     this.nodeId = nodeId;
   }
 

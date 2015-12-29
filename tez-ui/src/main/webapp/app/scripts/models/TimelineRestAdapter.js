@@ -85,15 +85,88 @@ App.TimelineSerializer = DS.RESTSerializer.extend({
   }
 });
 
+function getStatus(source) {
+  var status = Em.get(source, 'otherinfo.status') || Em.get(source, 'primaryfilters.status.0'),
+      event = source.events;
+
+  if(!status && event) {
+    if(event.findBy('eventtype', 'DAG_STARTED')) {
+      status = 'RUNNING';
+    }
+  }
+
+  return status;
+}
 
 var timelineJsonToDagMap = {
   id: 'entity',
   submittedTime: 'starttime',
-  startTime: 'otherinfo.startTime',
-  endTime: 'otherinfo.endTime',
+
+  startTime: {
+    custom: function(source) {
+      var time = Em.get(source, 'otherinfo.startTime'),
+          event = source.events;
+
+      if(!time && event) {
+        event = event.findBy('eventtype', 'DAG_STARTED');
+        if(event) {
+          time = event.timestamp;
+        }
+      }
+
+      return time;
+    }
+  },
+  endTime: {
+    custom: function(source) {
+      var time = Em.get(source, 'otherinfo.endTime'),
+          event = source.events;
+
+      if(!time && event) {
+        event = event.findBy('eventtype', 'DAG_FINISHED');
+        if(event) {
+          time = event.timestamp;
+        }
+      }
+
+      return time;
+    }
+  },
+
   name: 'primaryfilters.dagName.0',
   user: 'primaryfilters.user.0',
-  status: 'otherinfo.status',
+  callerId: 'primaryfilters.callerId.0',
+
+  status: {
+    custom: getStatus
+  },
+  progress: {
+    custom: function(source) {
+      var status = getStatus(source);
+      return status == 'SUCCEEDED' ? 1 : null;
+    }
+  },
+
+  containerLogs: {
+    custom: function(source) {
+      var containerLogs = [];
+      var otherinfo = Em.get(source, 'otherinfo');
+      if(!otherinfo) {
+        return undefined;
+      }
+      for (var key in otherinfo) {
+        if (key.indexOf('inProgressLogsURL_') === 0) {
+          var logs = Em.get(source, 'otherinfo.' + key);
+          if (logs.indexOf('http') !== 0) {
+            logs = 'http://' + logs;
+          }
+          var attemptid = key.substring(18);
+          containerLogs.push({id : attemptid, containerLog: logs});
+        }
+      }
+      return containerLogs;
+    }
+  },
   hasFailedTaskAttempts: {
     custom: function(source) {
       // if no other info is available we say no failed tasks attempts.
@@ -105,10 +178,22 @@ var timelineJsonToDagMap = {
   numFailedTasks: 'otherinfo.numFailedTasks',
   diagnostics: 'otherinfo.diagnostics',
 
-  counterGroups: 'otherinfo.counters.counterGroups',
+  counterGroups: {
+    custom: function(source) {
+      var otherinfo = source.otherinfo;
+      if(otherinfo) {
+        return Em.get(otherinfo, 'counters.counterGroups') || [];
+      }
+    }
+  },
 
   planName: 'otherinfo.dagPlan.dagName',
   planVersion: 'otherinfo.dagPlan.version',
+  amWebServiceVersion: {
+    custom: function(source) {
+      return Em.get(source, 'otherinfo.amWebServiceVersion') || '1';
+    }
+  },
   appContextInfo: {
     custom: function (source) {
       var appType = undefined,
@@ -160,6 +245,12 @@ var timelineJsonToTaskAttemptMap = {
   diagnostics: 'otherinfo.diagnostics',
   counterGroups: 'otherinfo.counters.counterGroups',
 
+  progress: {
+    custom: function(source) {
+      return Em.get(source, 'otherinfo.status') == 'SUCCEEDED' ? 1 : null;
+    }
+  },
+
   inProgressLog: 'otherinfo.inProgressLogsURL',
   completedLog: 'otherinfo.completedLogsURL',
 
@@ -187,6 +278,11 @@ var timelineJsonToTaskMap = {
   vertexID: 'primaryfilters.TEZ_VERTEX_ID.0',
   endTime: 'otherinfo.endTime',
   status: 'otherinfo.status',
+  progress: {
+    custom: function(source) {
+      return Em.get(source, 'otherinfo.status') == 'SUCCEEDED' ? 1 : null;
+    }
+  },
   numFailedTaskAttempts: 'otherinfo.numFailedTaskAttempts',
   diagnostics: 'otherinfo.diagnostics',
   counterGroups: 'otherinfo.counters.counterGroups',
@@ -215,6 +311,22 @@ var timelineJsonToVertexMap = {
   startTime: 'otherinfo.startTime',
   endTime: 'otherinfo.endTime',
 
+  progress: {
+    custom: function(source) {
+      return Em.get(source, 'otherinfo.status') == 'SUCCEEDED' ? 1 : null;
+    }
+  },
+  runningTasks: {
+    custom: function(source) {
+      return Em.get(source, 'otherinfo.status') == 'SUCCEEDED' ? 0 : null;
+    }
+  },
+  pendingTasks: {
+    custom: function(source) {
+      return Em.get(source, 'otherinfo.status') == 'SUCCEEDED' ? 0 : null;
+    }
+  },
+
   status: 'otherinfo.status',
   hasFailedTaskAttempts: {
     custom: function(source) {
@@ -225,6 +337,9 @@ var timelineJsonToVertexMap = {
     }
   },
   diagnostics: 'otherinfo.diagnostics',
+
+  failedTaskAttempts: 'otherinfo.numFailedTaskAttempts',
+  killedTaskAttempts: 'otherinfo.numKilledTaskAttempts',
 
   failedTasks: 'otherinfo.numFailedTasks',
   sucessfulTasks: 'otherinfo.numSucceededTasks',
@@ -422,9 +537,9 @@ var timelineJsonToAppDetailMap = {
   finishedTime: 'finishedTime',
   submittedTime: 'submittedTime',
 
-  appState: 'appState',
+  status: 'appState',
 
-  finalAppStatus: 'finalAppStatus',
+  finalStatus: 'finalAppStatus',
   diagnostics: 'otherinfo.diagnostics',
 };
 
@@ -447,7 +562,11 @@ var timelineJsonToTezAppMap = {
   user: 'primaryfilters.user.0',
 
   dags: 'relatedentities.TEZ_DAG_ID',
-  configs: 'configs'
+  configs: 'configs',
+
+  tezBuildTime: 'otherinfo.tezVersion.buildTime',
+  tezRevision: 'otherinfo.tezVersion.revision',
+  tezVersion: 'otherinfo.tezVersion.version'
 };
 
 App.TezAppSerializer = App.TimelineSerializer.extend({
@@ -522,3 +641,83 @@ App.HiveQuerySerializer = App.TimelineSerializer.extend({
 
 App.VertexProgressSerializer = App.DagProgressSerializer = DS.RESTSerializer.extend({});
 
+// v2 version of am web services
+App.DagInfoSerializer = DS.RESTSerializer.extend({
+  normalizePayload: function(rawPayload) {
+    return {
+      dagInfo : [rawPayload.dag]
+    }
+  }
+});
+
+App.VertexInfoSerializer = DS.RESTSerializer.extend({
+  map: {
+    id: 'id',
+    progress: 'progress',
+    status: 'status',
+    numTasks: 'totalTasks',
+    runningTasks: 'runningTasks',
+    sucessfulTasks: 'succeededTasks',
+    failedTaskAttempts: 'failedTaskAttempts',
+    killedTaskAttempts: 'killedTaskAttempts',
+    counters: 'counters'
+  },
+  normalizePayload: function(rawPayload) {
+    return {
+      vertexInfo : rawPayload.vertices
+    }
+  },
+  normalize: function(type, hash, prop) {
+    return Em.JsonMapper.map(hash, this.get('map'));
+  }
+});
+
+App.TaskInfoSerializer = DS.RESTSerializer.extend({
+  normalizePayload: function(rawPayload) {
+    return {
+      taskInfo : rawPayload.tasks
+    }
+  }
+});
+
+App.AttemptInfoSerializer = DS.RESTSerializer.extend({
+  normalizePayload: function(rawPayload) {
+    return {
+      attemptInfo : rawPayload.attempts
+    }
+  }
+});
+
+App.ClusterAppSerializer = App.TimelineSerializer.extend({
+  map: {
+    id: 'id',
+    status: 'state',
+    finalStatus: 'finalStatus',
+
+    name: 'name',
+    queue: 'queue',
+    user: 'user',
+    type: 'type',
+
+    startedTime: 'startedTime',
+    elapsedTime: 'elapsedTime',
+    finishedTime: 'finishedTime',
+
+    progress: 'progress'
+  },
+
+  _normalizeSingleDagPayload: function(rawPayload) {
+    return {
+      clusterApp: rawPayload.clusterApp.app
+    }
+  },
+
+  normalizePayload: function(rawPayload){
+    // we handled only single clusterApp
+    return this._normalizeSingleDagPayload(rawPayload);
+  },
+
+  normalize: function(type, hash, prop) {
+    return Em.JsonMapper.map(hash, this.get('map'));
+  }
+});

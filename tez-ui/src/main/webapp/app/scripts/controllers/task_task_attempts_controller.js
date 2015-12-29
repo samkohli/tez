@@ -28,6 +28,41 @@ App.TaskAttemptsController = App.TablePageController.extend(App.AutoCounterColum
 
   cacheDomain: Ember.computed.alias('controllers.task.dagID'),
 
+  pollingType: 'attemptInfo',
+
+  pollsterControl: function () {
+    if(this.get('vertex.dag.status') == 'RUNNING' &&
+        this.get('vertex.dag.amWebServiceVersion') != '1' &&
+        !this.get('loading') &&
+        this.get('isActive') &&
+        this.get('pollingEnabled') &&
+        this. get('rowsDisplayed.length') > 0) {
+      this.get('pollster').start();
+    }
+    else {
+      this.get('pollster').stop();
+    }
+  }.observes('vertex.dag.status',
+    'vertex.dag.amWebServiceVersion', 'rowsDisplayed', 'loading', 'isActive', 'pollingEnabled'),
+
+  pollsterOptionsObserver: function () {
+    this.set('pollster.options', {
+      appID: this.get('vertex.dag.applicationId'),
+      dagID: this.get('vertex.dag.idx'),
+      counters: this.get('countersDisplayed'),
+      attemptID: this.get('rowsDisplayed').map(function (row) {
+          var attemptIndex = App.Helpers.misc.getIndexFromId(row.get('id')),
+              taskIndex = App.Helpers.misc.getIndexFromId(row.get('taskID')),
+              vertexIndex = App.Helpers.misc.getIndexFromId(row.get('vertexID'));
+          return '%@_%@_%@'.fmt(vertexIndex, taskIndex, attemptIndex);
+        }).join(',')
+    });
+  }.observes('vertex.dag.applicationId', 'vertex.dag.idx', 'rowsDisplayed'),
+
+  countersDisplayed: function () {
+    return App.Helpers.misc.getCounterQueryParam(this.get('columns'));
+  }.property('columns'),
+
   beforeLoad: function () {
     var taskController = this.get('controllers.task'),
         model = taskController.get('model');
@@ -44,13 +79,12 @@ App.TaskAttemptsController = App.TablePageController.extend(App.AutoCounterColum
 
     var appDetailFetcher = that.store.find('dag', that.get('controllers.task.dagID')).
       then(function (dag) {
-        App.Helpers.misc.removeRecord(that.store, 'appDetail', dag.get('applicationId'));
-        return that.store.find('appDetail', dag.get('applicationId'));
+        return App.Helpers.misc.loadApp(that.store, dag.get('applicationId'));
       }).
       then(function(appDetail) {
-        var appState = appDetail.get('appState');
-        if (appState) {
-          that.set('yarnAppState', appState);
+        var status = appDetail.get('status');
+        if (status) {
+          that.set('yarnAppState', status);
         }
       });
     loaders.push(appDetailFetcher);
@@ -88,6 +122,8 @@ App.TaskAttemptsController = App.TablePageController.extend(App.AutoCounterColum
         headerCellName: 'Status',
         templateName: 'components/basic-table/status-cell',
         contentPath: 'status',
+        observePath: true,
+        onSort: this.onInProgressColumnSort.bind(this),
         getCellContent: function(row) {
           var status = App.Helpers.misc.getFixedupDisplayStatus(row.get('status'));
           return {
@@ -95,6 +131,14 @@ App.TaskAttemptsController = App.TablePageController.extend(App.AutoCounterColum
             statusIcon: App.Helpers.misc.getStatusClassForEntity(status)
           };
         }
+      },
+      {
+        id: 'progress',
+        headerCellName: 'Progress',
+        contentPath: 'progress',
+        observePath: true,
+        onSort: this.onInProgressColumnSort.bind(this),
+        templateName: 'components/basic-table/progress-cell'
       },
       {
         id: 'startTime',
@@ -186,5 +230,16 @@ App.TaskAttemptIndexController = Em.ObjectController.extend(App.ModelRefreshMixi
   taskAttemptIconStatus: function() {
     return App.Helpers.misc.getStatusClassForEntity(this.get('taskAttemptStatus'));
   }.property('id', 'status', 'counterGroups'),
+
+  load: function () {
+    var model = this.get('content');
+    if(model && $.isFunction(model.reload)) {
+      model.reload().then(function(record) {
+        if(record.get('isDirty')) {
+          record.rollback();
+        }
+      });
+    }
+  },
 
 });

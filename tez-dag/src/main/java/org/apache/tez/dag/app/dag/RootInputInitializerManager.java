@@ -45,9 +45,11 @@ import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.yarn.event.EventHandler;
 import org.apache.tez.common.ReflectionUtils;
+import org.apache.tez.common.TezUtilsInternal;
 import org.apache.tez.dag.api.InputDescriptor;
 import org.apache.tez.dag.api.InputInitializerDescriptor;
 import org.apache.tez.dag.api.RootInputLeafOutput;
+import org.apache.tez.dag.api.TezException;
 import org.apache.tez.dag.api.TezUncheckedException;
 import org.apache.tez.dag.api.event.*;
 import org.apache.tez.dag.api.event.VertexState;
@@ -99,19 +101,26 @@ public class RootInputInitializerManager {
     this.vertex = vertex;
     this.eventHandler = appContext.getEventHandler();
     this.rawExecutor = Executors.newCachedThreadPool(new ThreadFactoryBuilder()
-        .setDaemon(true).setNameFormat("InputInitializer [" + this.vertex.getName() + "] #%d").build());
+        .setDaemon(true).setNameFormat("InputInitializer {" + this.vertex.getName() + "} #%d").build());
     this.executor = MoreExecutors.listeningDecorator(rawExecutor);
     this.dagUgi = dagUgi;
     this.entityStateTracker = stateTracker;
   }
   
   public void runInputInitializers(List<RootInputLeafOutput<InputDescriptor, InputInitializerDescriptor>> 
-      inputs) {
+      inputs) throws TezException {
     for (RootInputLeafOutput<InputDescriptor, InputInitializerDescriptor> input : inputs) {
 
       InputInitializerContext context =
           new TezRootInputInitializerContextImpl(input, vertex, appContext, this);
-      InputInitializer initializer = createInitializer(input, context);
+
+      InputInitializer initializer;
+      try {
+        TezUtilsInternal.setHadoopCallerContext(appContext.getHadoopShim(), vertex.getVertexId());
+        initializer = createInitializer(input, context);
+      } finally {
+        appContext.getHadoopShim().clearHadoopCallerContext();
+      }
 
       InitializerWrapper initializerWrapper =
           new InitializerWrapper(input, initializer, context, vertex, entityStateTracker, appContext);
@@ -126,14 +135,14 @@ public class RootInputInitializerManager {
 
       initializerMap.put(input.getName(), initializerWrapper);
       ListenableFuture<List<Event>> future = executor
-          .submit(new InputInitializerCallable(initializerWrapper, dagUgi));
+          .submit(new InputInitializerCallable(initializerWrapper, dagUgi, appContext));
       Futures.addCallback(future, createInputInitializerCallback(initializerWrapper));
     }
   }
 
   @VisibleForTesting
   protected InputInitializer createInitializer(RootInputLeafOutput<InputDescriptor, InputInitializerDescriptor>
-      input, InputInitializerContext context) {
+      input, InputInitializerContext context) throws TezException {
     InputInitializer initializer = ReflectionUtils
         .createClazzInstance(input.getControllerDescriptor().getClassName(),
             new Class[]{InputInitializerContext.class}, new Object[]{context});
@@ -228,10 +237,13 @@ public class RootInputInitializerManager {
 
     private final InitializerWrapper initializerWrapper;
     private final UserGroupInformation ugi;
+    private final AppContext appContext;
 
-    public InputInitializerCallable(InitializerWrapper initializer, UserGroupInformation ugi) {
+    public InputInitializerCallable(InitializerWrapper initializer, UserGroupInformation ugi,
+                                    AppContext appContext) {
       this.initializerWrapper = initializer;
       this.ugi = ugi;
+      this.appContext = appContext;
     }
 
     @Override
@@ -242,7 +254,13 @@ public class RootInputInitializerManager {
           LOG.info(
               "Starting InputInitializer for Input: " + initializerWrapper.getInput().getName() +
                   " on vertex " + initializerWrapper.getVertexLogIdentifier());
-          return initializerWrapper.getInitializer().initialize();
+          try {
+            TezUtilsInternal.setHadoopCallerContext(appContext.getHadoopShim(),
+                initializerWrapper.vertexId);
+            return initializerWrapper.getInitializer().initialize();
+          } finally {
+            appContext.getHadoopShim().clearHadoopCallerContext();
+          }
         }
       });
       return events;

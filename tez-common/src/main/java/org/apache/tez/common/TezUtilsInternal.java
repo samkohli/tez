@@ -35,12 +35,17 @@ import java.util.zip.Inflater;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.Descriptors;
 import com.google.protobuf.TextFormat;
-import org.apache.commons.lang.StringUtils;
 import org.apache.hadoop.classification.InterfaceAudience.Private;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.security.Credentials;
+import org.apache.hadoop.yarn.api.records.ApplicationId;
 import org.apache.log4j.Appender;
 import org.apache.tez.dag.api.DagTypeConverters;
+import org.apache.tez.dag.records.TezDAGID;
+import org.apache.tez.dag.records.TezTaskAttemptID;
+import org.apache.tez.dag.records.TezVertexID;
+import org.apache.tez.hadoop.shim.HadoopShim;
+import org.apache.tez.serviceplugins.api.TaskAttemptEndReason;
 import org.apache.tez.dag.api.TezConstants;
 import org.apache.tez.dag.api.records.DAGProtos;
 import org.apache.tez.dag.api.records.DAGProtos.ConfigurationProto;
@@ -49,13 +54,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.google.common.base.Stopwatch;
+import org.apache.tez.dag.records.TaskAttemptTerminationCause;
 
 @Private
 public class TezUtilsInternal {
 
   private static final Logger LOG = LoggerFactory.getLogger(TezUtilsInternal.class);
 
-  public static void addUserSpecifiedTezConfiguration(String baseDir, Configuration conf) throws
+  public static ConfigurationProto readUserSpecifiedTezConfiguration(String baseDir) throws
       IOException {
     FileInputStream confPBBinaryStream = null;
     ConfigurationProto.Builder confProtoBuilder = ConfigurationProto.newBuilder();
@@ -70,24 +76,48 @@ public class TezUtilsInternal {
     }
 
     ConfigurationProto confProto = confProtoBuilder.build();
+    return confProto;
+  }
 
-    List<PlanKeyValuePair> kvPairList = confProto.getConfKeyValuesList();
+  public static void addUserSpecifiedTezConfiguration(Configuration conf,
+                                                      List<PlanKeyValuePair> kvPairList) {
     if (kvPairList != null && !kvPairList.isEmpty()) {
       for (PlanKeyValuePair kvPair : kvPairList) {
         conf.set(kvPair.getKey(), kvPair.getValue());
       }
     }
   }
+//
+//  public static void addUserSpecifiedTezConfiguration(String baseDir, Configuration conf) throws
+//      IOException {
+//    FileInputStream confPBBinaryStream = null;
+//    ConfigurationProto.Builder confProtoBuilder = ConfigurationProto.newBuilder();
+//    try {
+//      confPBBinaryStream =
+//          new FileInputStream(new File(baseDir, TezConstants.TEZ_PB_BINARY_CONF_NAME));
+//      confProtoBuilder.mergeFrom(confPBBinaryStream);
+//    } finally {
+//      if (confPBBinaryStream != null) {
+//        confPBBinaryStream.close();
+//      }
+//    }
+//
+//    ConfigurationProto confProto = confProtoBuilder.build();
+//
+//    List<PlanKeyValuePair> kvPairList = confProto.getConfKeyValuesList();
+//    if (kvPairList != null && !kvPairList.isEmpty()) {
+//      for (PlanKeyValuePair kvPair : kvPairList) {
+//        conf.set(kvPair.getKey(), kvPair.getValue());
+//      }
+//    }
+//  }
 
 
   public static byte[] compressBytes(byte[] inBytes) throws IOException {
-    Stopwatch sw = null;
-    if (LOG.isDebugEnabled()) {
-      sw = new Stopwatch().start();
-    }
+    Stopwatch sw = new Stopwatch().start();
     byte[] compressed = compressBytesInflateDeflate(inBytes);
+    sw.stop();
     if (LOG.isDebugEnabled()) {
-      sw.stop();
       LOG.debug("UncompressedSize: " + inBytes.length + ", CompressedSize: " + compressed.length
           + ", CompressTime: " + sw.elapsedMillis());
     }
@@ -95,13 +125,10 @@ public class TezUtilsInternal {
   }
 
   public static byte[] uncompressBytes(byte[] inBytes) throws IOException {
-    Stopwatch sw = null;
-    if (LOG.isDebugEnabled()) {
-      sw = new Stopwatch().start();
-    }
+    Stopwatch sw = new Stopwatch().start();
     byte[] uncompressed = uncompressBytesInflateDeflate(inBytes);
+    sw.stop();
     if (LOG.isDebugEnabled()) {
-      sw.stop();
       LOG.debug("CompressedSize: " + inBytes.length + ", UncompressedSize: " + uncompressed.length
           + ", UncompressTimeTaken: " + sw.elapsedMillis());
     }
@@ -232,6 +259,98 @@ public class TezUtilsInternal {
       }
     }
     return sb.toString();
+  }
+
+  public static TaskAttemptTerminationCause fromTaskAttemptEndReason(
+      TaskAttemptEndReason taskAttemptEndReason) {
+    if (taskAttemptEndReason == null) {
+      return null;
+    }
+    switch (taskAttemptEndReason) {
+      case COMMUNICATION_ERROR:
+        return TaskAttemptTerminationCause.COMMUNICATION_ERROR;
+      case EXECUTOR_BUSY:
+        return TaskAttemptTerminationCause.SERVICE_BUSY;
+      case INTERNAL_PREEMPTION:
+        return TaskAttemptTerminationCause.INTERNAL_PREEMPTION;
+      case EXTERNAL_PREEMPTION:
+        return TaskAttemptTerminationCause.EXTERNAL_PREEMPTION;
+      case APPLICATION_ERROR:
+        return TaskAttemptTerminationCause.APPLICATION_ERROR;
+      case FRAMEWORK_ERROR:
+        return TaskAttemptTerminationCause.FRAMEWORK_ERROR;
+      case NODE_FAILED:
+        return TaskAttemptTerminationCause.NODE_FAILED;
+      case CONTAINER_EXITED:
+        return TaskAttemptTerminationCause.CONTAINER_EXITED;
+      case OTHER:
+        return TaskAttemptTerminationCause.UNKNOWN_ERROR;
+      default:
+        return TaskAttemptTerminationCause.UNKNOWN_ERROR;
+    }
+  }
+
+  public static TaskAttemptEndReason toTaskAttemptEndReason(TaskAttemptTerminationCause cause) {
+    // TODO Post TEZ-2003. Consolidate these states, and mappings.
+    if (cause == null) {
+      return null;
+    }
+    switch (cause) {
+      case COMMUNICATION_ERROR:
+        return TaskAttemptEndReason.COMMUNICATION_ERROR;
+      case SERVICE_BUSY:
+        return TaskAttemptEndReason.EXECUTOR_BUSY;
+      case INTERNAL_PREEMPTION:
+        return TaskAttemptEndReason.INTERNAL_PREEMPTION;
+      case EXTERNAL_PREEMPTION:
+        return TaskAttemptEndReason.EXTERNAL_PREEMPTION;
+      case APPLICATION_ERROR:
+        return TaskAttemptEndReason.APPLICATION_ERROR;
+      case FRAMEWORK_ERROR:
+        return TaskAttemptEndReason.FRAMEWORK_ERROR;
+      case NODE_FAILED:
+        return TaskAttemptEndReason.NODE_FAILED;
+      case CONTAINER_EXITED:
+        return TaskAttemptEndReason.CONTAINER_EXITED;
+      case INTERRUPTED_BY_SYSTEM:
+      case INTERRUPTED_BY_USER:
+      case UNKNOWN_ERROR:
+      case TERMINATED_BY_CLIENT:
+      case TERMINATED_AT_SHUTDOWN:
+      case TERMINATED_INEFFECTIVE_SPECULATION:
+      case TERMINATED_EFFECTIVE_SPECULATION:
+      case TERMINATED_ORPHANED:
+      case INPUT_READ_ERROR:
+      case OUTPUT_WRITE_ERROR:
+      case OUTPUT_LOST:
+      case TASK_HEARTBEAT_ERROR:
+      case CONTAINER_LAUNCH_FAILED:
+
+      case CONTAINER_STOPPED:
+      case NODE_DISK_ERROR:
+      default:
+        return TaskAttemptEndReason.OTHER;
+    }
+  }
+
+  @Private
+  public static void setHadoopCallerContext(HadoopShim hadoopShim, TezTaskAttemptID attemptID) {
+    hadoopShim.setHadoopCallerContext("tez_ta:" + attemptID.toString());
+  }
+
+  @Private
+  public static void setHadoopCallerContext(HadoopShim hadoopShim, TezVertexID vertexID) {
+    hadoopShim.setHadoopCallerContext("tez_v:" + vertexID.toString());
+  }
+
+  @Private
+  public static void setHadoopCallerContext(HadoopShim hadoopShim, TezDAGID dagID) {
+    hadoopShim.setHadoopCallerContext("tez_dag:" + dagID.toString());
+  }
+
+  @Private
+  public static void setHadoopCallerContext(HadoopShim hadoopShim, ApplicationId appID) {
+    hadoopShim.setHadoopCallerContext("tez_app:" + appID.toString());
   }
 
 }

@@ -76,6 +76,13 @@ body, html {
       top: 2px;
     }
 
+    .auto-update {
+      .inline-block;
+      .align-checknradio;
+
+      padding-left: 10px;
+    }
+
     .align-children-right {
       vertical-align: top;
     }
@@ -184,7 +191,9 @@ body, html {
     }
 
     .message-container {
-      width:90%;
+      width:100%;
+      overflow: scroll;
+      max-height: 100px;
 
       .align-children-left;
 
@@ -196,8 +205,8 @@ body, html {
     }
 
     .close-container {
-      width:10%;
-
+      position: absolute;
+      right: 15px;
       .align-children-right;
     }
   }
@@ -230,8 +239,10 @@ body, html {
     overflow: auto;
     max-height: 300px;
 
+    .force-scrollbar;
+
     &.visible {
-      display: inline;
+      display: block;
     }
   }
 
@@ -358,6 +369,10 @@ body, html {
   table-layout: fixed;
   white-space: nowrap;
 
+  .progress {
+    margin-bottom: 0px;
+  }
+
   tr {
     margin: 0px 0px 0px 15px;
     overflow: hidden;
@@ -391,6 +406,12 @@ body, html {
   &.success {
     .fa-icon(check-circle);
     color: @success-color;
+  }
+
+  &.schedule {
+    .fa-icon(history);
+    .fa-flip-horizontal;
+    color: @warning-color;
   }
 
   &.running {
@@ -751,6 +772,13 @@ body, html {
           padding: 5px;
           position: relative;
 
+          .progress {
+            height: 15px;
+            .sr-only {
+              top: -2px;
+            }
+          }
+
           .cell-content {
             overflow: hidden;
             text-overflow: ellipsis;
@@ -933,5 +961,20 @@ body, html {
 .code-mirror-container {
   .panel-body {
     padding: 0px;
+  }
+}
+
+.progress {
+  .sr-only {
+    text-shadow:
+        -1px -1px 1px #337ab7,
+        1px -1px  1px #337ab7,
+        -1px 1px 1px #337ab7,
+        1px 1px 1px #337ab7;
+
+    position: relative;
+    overflow: visible;
+    clip: auto;
+    left: 5px;
   }
 }

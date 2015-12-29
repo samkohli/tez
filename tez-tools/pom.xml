@@ -21,10 +21,15 @@
   <parent>
     <groupId>org.apache.tez</groupId>
     <artifactId>tez</artifactId>
-    <version>0.8.0-SNAPSHOT</version>
+    <version>0.8.2-SNAPSHOT</version>
   </parent>
   <artifactId>tez-tools</artifactId>
   <packaging>pom</packaging>
+
+  <modules>
+    <module>analyzers</module>
+    <module>tez-javadoc-tools</module>
+  </modules>
 
   <build>
     <plugins>

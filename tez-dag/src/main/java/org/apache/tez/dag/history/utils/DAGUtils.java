@@ -24,6 +24,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.TreeMap;
@@ -42,14 +43,19 @@ import org.apache.tez.dag.api.records.DAGProtos;
 import org.apache.tez.dag.api.records.DAGProtos.DAGPlan;
 import org.apache.tez.dag.api.records.DAGProtos.PlanGroupInputEdgeInfo;
 import org.apache.tez.dag.app.dag.impl.VertexStats;
+import org.apache.tez.dag.app.dag.impl.TaskAttemptImpl.DataEventDependencyInfo;
+import org.apache.tez.dag.history.logging.EntityTypes;
 import org.apache.tez.dag.records.TezTaskID;
 import org.codehaus.jettison.json.JSONException;
 import org.codehaus.jettison.json.JSONObject;
+
+import com.google.common.base.Preconditions;
 
 public class DAGUtils {
 
   public static final String DAG_NAME_KEY = "dagName";
   public static final String DAG_INFO_KEY = "dagInfo";
+  public static final String DAG_CONTEXT_KEY = "dagContext";
   public static final String VERTICES_KEY = "vertices";
   public static final String EDGES_KEY = "edges";
   public static final String VERTEX_GROUPS_KEY = "vertexGroups";
@@ -99,6 +105,27 @@ public class DAGUtils {
     }
     return dagJson;
   }
+  
+  public static JSONObject convertDataEventDependencyInfoToJSON(List<DataEventDependencyInfo> info) {
+    return new JSONObject(convertDataEventDependecyInfoToATS(info));
+  }
+  
+  public static Map<String, Object> convertDataEventDependecyInfoToATS(List<DataEventDependencyInfo> info) {
+    ArrayList<Object> infoList = new ArrayList<Object>();
+    for (DataEventDependencyInfo event : info) {
+      Map<String, Object> eventObj = new LinkedHashMap<String, Object>();
+      String id = "";
+      if (event.getTaskAttemptId() != null) {
+        id = event.getTaskAttemptId().toString();
+      }
+      eventObj.put(EntityTypes.TEZ_TASK_ATTEMPT_ID.name(), id);
+      eventObj.put(ATSConstants.TIMESTAMP, event.getTimestamp());
+      infoList.add(eventObj);
+    }
+    Map<String,Object> object = new LinkedHashMap<String, Object>();
+    putInto(object, ATSConstants.LAST_DATA_EVENTS, infoList);
+    return object;
+  }
 
   public static JSONObject convertCountersToJSON(TezCounters counters)
       throws JSONException {
@@ -141,14 +168,33 @@ public class DAGUtils {
     return object;
   }
 
+  static Map<String, String> createDagInfoMap(DAGPlan dagPlan) {
+    Preconditions.checkArgument(dagPlan.hasCallerContext());
+    Map<String, String> dagInfo = new TreeMap<String, String>();
+    dagInfo.put(ATSConstants.CONTEXT, dagPlan.getCallerContext().getContext());
+    if (dagPlan.getCallerContext().hasCallerId()) {
+      dagInfo.put(ATSConstants.CALLER_ID, dagPlan.getCallerContext().getCallerId());
+    }
+    if (dagPlan.getCallerContext().hasCallerType()) {
+      dagInfo.put(ATSConstants.CALLER_TYPE, dagPlan.getCallerContext().getCallerType());
+    }
+    if (dagPlan.getCallerContext().hasBlob()) {
+      dagInfo.put(ATSConstants.DESCRIPTION, dagPlan.getCallerContext().getBlob());
+    }
+    return dagInfo;
+  }
+
   public static Map<String,Object> convertDAGPlanToATSMap(DAGPlan dagPlan) throws IOException {
 
     final String VERSION_KEY = "version";
-    final int version = 1;
+    final int version = 2;
     Map<String,Object> dagMap = new LinkedHashMap<String, Object>();
     dagMap.put(DAG_NAME_KEY, dagPlan.getName());
     if (dagPlan.hasDagInfo()) {
       dagMap.put(DAG_INFO_KEY, dagPlan.getDagInfo());
+    }
+    if (dagPlan.hasCallerContext()) {
+      dagMap.put(DAG_CONTEXT_KEY, createDagInfoMap(dagPlan));
     }
     dagMap.put(VERSION_KEY, version);
     ArrayList<Object> verticesList = new ArrayList<Object>();

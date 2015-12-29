@@ -16,7 +16,7 @@
  * limitations under the License.
  */
 
-App.VertexIndexController = Em.ObjectController.extend(App.ModelRefreshMixin, {
+App.VertexIndexController = App.PollingController.extend(App.ModelRefreshMixin, {
   controllerName: 'VertexIndexController',
 
   needs: 'vertex',
@@ -29,7 +29,7 @@ App.VertexIndexController = Em.ObjectController.extend(App.ModelRefreshMixin, {
       return controller.loadAdditional(vertex);
     }).catch(function(error){
       Em.Logger.error(error);
-      var err = App.Helpers.misc.formatError(error, defaultErrMsg);
+      var err = App.Helpers.misc.formatError(error);
       var msg = 'error code: %@, message: %@'.fmt(err.errCode, err.msg);
       App.Helpers.ErrorBar.getInstance().show(msg, err.details);
     });

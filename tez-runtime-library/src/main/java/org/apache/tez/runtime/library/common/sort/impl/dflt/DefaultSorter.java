@@ -60,7 +60,7 @@ import org.apache.tez.runtime.library.common.sort.impl.TezMerger.Segment;
 import com.google.common.base.Preconditions;
 
 @SuppressWarnings({"unchecked", "rawtypes"})
-public class DefaultSorter extends ExternalSorter implements IndexedSortable {
+public final class DefaultSorter extends ExternalSorter implements IndexedSortable {
   
   private static final Logger LOG = LoggerFactory.getLogger(DefaultSorter.class);
 
@@ -120,6 +120,8 @@ public class DefaultSorter extends ExternalSorter implements IndexedSortable {
   private long totalKeys = 0;
   private long sameKey = 0;
 
+  public static final int MAX_IO_SORT_MB = 1800;
+
 
   public DefaultSorter(OutputContext outputContext, Configuration conf, int numOutputs,
       long initialMemoryAvailable) throws IOException {
@@ -128,7 +130,7 @@ public class DefaultSorter extends ExternalSorter implements IndexedSortable {
     final float spillper = this.conf.getFloat(
         TezRuntimeConfiguration.TEZ_RUNTIME_SORT_SPILL_PERCENT,
         TezRuntimeConfiguration.TEZ_RUNTIME_SORT_SPILL_PERCENT_DEFAULT);
-    final int sortmb = computeSortBufferSize((int) availableMemoryMb);
+    final int sortmb = computeSortBufferSize((int) availableMemoryMb, outputContext.getDestinationVertexName());
 
     Preconditions.checkArgument(spillper <= (float) 1.0 && spillper > (float) 0.0,
         TezRuntimeConfiguration.TEZ_RUNTIME_SORT_SPILL_PERCENT
@@ -142,7 +144,8 @@ public class DefaultSorter extends ExternalSorter implements IndexedSortable {
         .TEZ_RUNTIME_PIPELINED_SHUFFLE_ENABLED_DEFAULT);
 
     if (confPipelinedShuffle) {
-      LOG.warn(TezRuntimeConfiguration.TEZ_RUNTIME_PIPELINED_SHUFFLE_ENABLED  + " does not work "
+      LOG.warn(outputContext.getDestinationVertexName() + ": " +
+          TezRuntimeConfiguration.TEZ_RUNTIME_PIPELINED_SHUFFLE_ENABLED + " does not work "
           + "with DefaultSorter. It is supported only with PipelinedSorter.");
     }
 
@@ -162,10 +165,14 @@ public class DefaultSorter extends ExternalSorter implements IndexedSortable {
     softLimit = (int)(kvbuffer.length * spillper);
     bufferRemaining = softLimit;
     if (LOG.isInfoEnabled()) {
-      LOG.info(TezRuntimeConfiguration.TEZ_RUNTIME_IO_SORT_MB + ": " + sortmb);
-      LOG.info("soft limit at " + softLimit);
-      LOG.info("bufstart = " + bufstart + "; bufvoid = " + bufvoid);
-      LOG.info("kvstart = " + kvstart + "; length = " + maxRec + "; finalMergeEnabled = " + isFinalMergeEnabled());
+      LOG.info(outputContext.getDestinationVertexName() + ": "
+          + TezRuntimeConfiguration.TEZ_RUNTIME_IO_SORT_MB + "=" + sortmb
+          + ", soft limit=" + softLimit
+          + ", bufstart=" + bufstart
+          + ", bufvoid=" + bufvoid
+          + ", kvstart=" + kvstart
+          + ", legnth=" + maxRec
+          + ", finalMergeEnabled=" + isFinalMergeEnabled());
     }
 
     // k/v serialization
@@ -175,8 +182,8 @@ public class DefaultSorter extends ExternalSorter implements IndexedSortable {
     spillInProgress = false;
     minSpillsForCombine = this.conf.getInt(TezRuntimeConfiguration.TEZ_RUNTIME_COMBINE_MIN_SPILLS, 3);
     spillThread.setDaemon(true);
-    spillThread.setName("SpillThread ["
-        + TezUtilsInternal.cleanVertexName(outputContext.getDestinationVertexName() + "]"));
+    spillThread.setName("SpillThread {"
+        + TezUtilsInternal.cleanVertexName(outputContext.getDestinationVertexName() + "}"));
     spillLock.lock();
     try {
       spillThread.start();
@@ -198,20 +205,22 @@ public class DefaultSorter extends ExternalSorter implements IndexedSortable {
   }
 
   @VisibleForTesting
-  static int computeSortBufferSize(int availableMemoryMB) {
+  static int computeSortBufferSize(int availableMemoryMB, String logContext) {
 
     if (availableMemoryMB <= 0) {
       throw new RuntimeException(TezRuntimeConfiguration.TEZ_RUNTIME_IO_SORT_MB +
           "=" + availableMemoryMB + ". It should be > 0");
     }
 
-    if (availableMemoryMB > 2047) {
-      LOG.warn("Scaling down " + TezRuntimeConfiguration.TEZ_RUNTIME_IO_SORT_MB +
-          "=" + availableMemoryMB + " to 2047 (max sort buffer size supported for DefaultSorter)");
+    if (availableMemoryMB > MAX_IO_SORT_MB) {
+      LOG.warn(logContext + ": Scaling down " + TezRuntimeConfiguration.TEZ_RUNTIME_IO_SORT_MB +
+          "=" + availableMemoryMB + " to " + MAX_IO_SORT_MB
+          + " (max sort buffer size supported forDefaultSorter)");
     }
 
-    //cap sort buffer to 2047 for DefaultSorter.
-    return Math.min(2047, availableMemoryMB);
+    // cap sort buffer to MAX_IO_SORT_MB for DefaultSorter.
+    // Not using 2047 to avoid any ArrayIndexOutofBounds in collect() phase.
+    return Math.min(MAX_IO_SORT_MB, availableMemoryMB);
   }
 
   @Override
@@ -277,6 +286,15 @@ public class DefaultSorter extends ExternalSorter implements IndexedSortable {
               // leave at least half the split buffer for serialization data
               // ensure that kvindex >= bufindex
               final int distkvi = distanceTo(bufindex, kvbidx);
+              /**
+               * Reason for capping sort buffer to MAX_IO_SORT_MB
+               * E.g
+               * kvbuffer.length = 2146435072 (2047 MB)
+               * Corner case: bufIndex=2026133899, kvbidx=523629312.
+               * distkvi = mod - i + j = 2146435072 - 2026133899 + 523629312 = 643930485
+               * newPos = (2026133899 + (max(.., min(643930485/2, 271128624))) (This would
+               * overflow)
+               */
               final int newPos = (bufindex +
                 Math.max(2 * METASIZE - 1,
                         Math.min(distkvi / 2,
@@ -329,6 +347,7 @@ public class DefaultSorter extends ExternalSorter implements IndexedSortable {
       int valend = bb.markRecord();
 
       mapOutputRecordCounter.increment(1);
+      outputContext.notifyProgress();
       mapOutputByteCounter.increment(
           distanceTo(keystart, valend, bufvoid));
 
@@ -341,7 +360,7 @@ public class DefaultSorter extends ExternalSorter implements IndexedSortable {
       kvindex = (int)(((long)kvindex - NMETA + kvmeta.capacity()) % kvmeta.capacity());
       totalKeys++;
     } catch (MapBufferTooSmallException e) {
-      LOG.info("Record too large for in-memory buffer: " + e.getMessage());
+      LOG.info(outputContext.getDestinationVertexName() + ": Record too large for in-memory buffer: " + e.getMessage());
       spillSingleRecord(key, value, partition);
       mapOutputRecordCounter.increment(1);
       return;
@@ -360,7 +379,7 @@ public class DefaultSorter extends ExternalSorter implements IndexedSortable {
     // Cast one of the operands to long to avoid integer overflow
     kvindex = (int) (((long) aligned - METASIZE + kvbuffer.length) % kvbuffer.length) / 4;
     if (LOG.isInfoEnabled()) {
-      LOG.info("(EQUATOR) " + pos + " kvi " + kvindex +
+      LOG.info(outputContext.getDestinationVertexName() + ": " + "(EQUATOR) " + pos + " kvi " + kvindex +
           "(" + (kvindex * 4) + ")");
     }
   }
@@ -378,7 +397,7 @@ public class DefaultSorter extends ExternalSorter implements IndexedSortable {
     // Cast one of the operands to long to avoid integer overflow
     kvstart = kvend = (int) (((long) aligned - METASIZE + kvbuffer.length) % kvbuffer.length) / 4;
     if (LOG.isInfoEnabled()) {
-      LOG.info("(RESET) equator " + e + " kv " + kvstart + "(" +
+      LOG.info(outputContext.getDestinationVertexName() + ": " + "(RESET) equator " + e + " kv " + kvstart + "(" +
         (kvstart * 4) + ")" + " kvi " + kvindex + "(" + (kvindex * 4) + ")");
     }
   }
@@ -608,7 +627,9 @@ public class DefaultSorter extends ExternalSorter implements IndexedSortable {
         }
       }
       // here, we know that we have sufficient space to write
-      if (bufindex + len > bufvoid) {
+      // int overflow possible with (bufindex + len)
+      long futureBufIndex = (long) bufindex + len;
+      if (futureBufIndex > bufvoid) {
         final int gaplen = bufvoid - bufindex;
         System.arraycopy(b, off, kvbuffer, bufindex, gaplen);
         len -= gaplen;
@@ -632,7 +653,7 @@ public class DefaultSorter extends ExternalSorter implements IndexedSortable {
       spillThread.interrupt();
       spillThread.join();
     } catch (InterruptedException e) {
-      LOG.info("Spill thread interrupted");
+      LOG.info(outputContext.getDestinationVertexName() + ": " + "Spill thread interrupted");
       //Reset status
       Thread.currentThread().interrupt();
       throw new IOInterruptedException("Spill failed", e);
@@ -641,7 +662,8 @@ public class DefaultSorter extends ExternalSorter implements IndexedSortable {
 
   @Override
   public void flush() throws IOException {
-    LOG.info("Starting flush of map output");
+    LOG.info(outputContext.getDestinationVertexName() + ": " + "Starting flush of map output");
+    outputContext.notifyProgress();
     if (Thread.currentThread().isInterrupted()) {
       /**
        * Possible that the thread got interrupted when flush was happening or when the flush was
@@ -676,15 +698,22 @@ public class DefaultSorter extends ExternalSorter implements IndexedSortable {
         kvend = (kvindex + NMETA) % kvmeta.capacity();
         bufend = bufmark;
         if (LOG.isInfoEnabled()) {
-          LOG.info("Sorting & Spilling map output");
-          LOG.info("bufstart = " + bufstart + "; bufend = " + bufmark +
-                   "; bufvoid = " + bufvoid);
-          LOG.info("kvstart = " + kvstart + "(" + (kvstart * 4) +
-                   "); kvend = " + kvend + "(" + (kvend * 4) +
-                   "); length = " + (distanceTo(kvend, kvstart,
-                         kvmeta.capacity()) + 1) + "/" + maxRec);
+          LOG.info(
+              outputContext.getDestinationVertexName() + ": " + "Sorting & Spilling map output. "
+                  + "bufstart = " + bufstart + ", bufend = " + bufmark + ", bufvoid = " + bufvoid
+                  + "; " + "kvstart=" + kvstart + "(" + (kvstart * 4) + ")"
+                  + ", kvend = " + kvend + "(" + (kvend * 4) + ")"
+                  + ", length = " + (distanceTo(kvend, kvstart, kvmeta.capacity()) + 1) + "/" +
+                  maxRec);
         }
-        sortAndSpill();
+        long sameKeyCount = 0;
+        long totalKeysCount = 0;
+        synchronized (this) {
+          sameKeyCount = sameKey;
+          totalKeysCount = totalKeys;
+        }
+        outputContext.notifyProgress();
+        sortAndSpill(sameKeyCount, totalKeysCount);
       }
     } catch (InterruptedException e) {
       //Reset status
@@ -711,10 +740,11 @@ public class DefaultSorter extends ExternalSorter implements IndexedSortable {
     }
   }
 
-  @Override
-  public void close() throws IOException { }
 
   protected class SpillThread extends Thread {
+
+    volatile long totalKeysCount;
+    volatile long sameKeyCount;
 
     @Override
     public void run() {
@@ -728,9 +758,9 @@ public class DefaultSorter extends ExternalSorter implements IndexedSortable {
           }
           try {
             spillLock.unlock();
-            sortAndSpill();
+            sortAndSpill(sameKeyCount, totalKeysCount);
           } catch (Throwable t) {
-            LOG.warn("Got an exception in sortAndSpill", t);
+            LOG.warn(outputContext.getDestinationVertexName() + ": " + "Got an exception in sortAndSpill", t);
             sortSpillException = t;
           } finally {
             spillLock.lock();
@@ -743,12 +773,17 @@ public class DefaultSorter extends ExternalSorter implements IndexedSortable {
           }
         }
       } catch (InterruptedException e) {
-        LOG.info("Spill thread interrupted");
+        LOG.info(outputContext.getDestinationVertexName() + ": " + "Spill thread interrupted");
         Thread.currentThread().interrupt();
       } finally {
         spillLock.unlock();
         spillThreadRunning = false;
       }
+    }
+
+    public void setTotalKeysProcessed(long sameKeyCount, long totalKeysCount) {
+      this.sameKeyCount = sameKeyCount;
+      this.totalKeysCount = totalKeysCount;
     }
   }
 
@@ -774,14 +809,13 @@ public class DefaultSorter extends ExternalSorter implements IndexedSortable {
     bufend = bufmark;
     spillInProgress = true;
     if (LOG.isInfoEnabled()) {
-      LOG.info("Spilling map output");
-      LOG.info("bufstart = " + bufstart + "; bufend = " + bufmark +
-               "; bufvoid = " + bufvoid);
-      LOG.info("kvstart = " + kvstart + "(" + (kvstart * 4) +
-               "); kvend = " + kvend + "(" + (kvend * 4) +
-               "); length = " + (distanceTo(kvend, kvstart,
-                     kvmeta.capacity()) + 1) + "/" + maxRec);
+      LOG.info(outputContext.getDestinationVertexName() + ": Spilling map output."
+          + "bufstart=" + bufstart + ", bufend = " + bufmark + ", bufvoid = " + bufvoid
+          +"; kvstart=" + kvstart + "(" + (kvstart * 4) + ")"
+          +", kvend = " + kvend + "(" + (kvend * 4) + ")"
+          + ", length = " + (distanceTo(kvend, kvstart, kvmeta.capacity()) + 1) + "/" + maxRec);
     }
+    spillThread.setTotalKeysProcessed(sameKey, totalKeys);
     spillReady.signal();
   }
 
@@ -796,16 +830,16 @@ public class DefaultSorter extends ExternalSorter implements IndexedSortable {
         : kvmeta.capacity() + kvstart) / NMETA;
   }
 
-  private boolean isRLENeeded() {
-    return (sameKey > (0.1 * totalKeys)) || (sameKey < 0);
+  private boolean isRLENeeded(long sameKeyCount, long totalKeysCount) {
+    return (sameKeyCount > (0.1 * totalKeysCount)) || (sameKeyCount < 0);
   }
 
-  protected void sortAndSpill()
+  protected void sortAndSpill(long sameKeyCount, long totalKeysCount)
       throws IOException, InterruptedException {
     final int mstart = getMetaStart();
     final int mend = getMetaEnd();
-    sorter.sort(this, mstart, mend, nullProgressable);
-    spill(mstart, mend);
+    sorter.sort(this, mstart, mend, progressable);
+    spill(mstart, mend, sameKeyCount, totalKeysCount);
   }
 
   private void adjustSpillCounters(long rawLen, long compLength) {
@@ -823,7 +857,7 @@ public class DefaultSorter extends ExternalSorter implements IndexedSortable {
     }
   }
 
-  protected void spill(int mstart, int mend)
+  protected void spill(int mstart, int mend, long sameKeyCount, long totalKeysCount)
       throws IOException, InterruptedException {
 
     //approximate the length of the output file to be the length of the
@@ -843,7 +877,7 @@ public class DefaultSorter extends ExternalSorter implements IndexedSortable {
 
       int spindex = mstart;
       final InMemValBytes value = createInMemValBytes();
-      boolean rle = isRLENeeded();
+      boolean rle = isRLENeeded(sameKeyCount, totalKeysCount);
       for (int i = 0; i < partitions; ++i) {
         IFile.Writer writer = null;
         try {
@@ -876,7 +910,7 @@ public class DefaultSorter extends ExternalSorter implements IndexedSortable {
               TezRawKeyValueIterator kvIter =
                 new MRResultIterator(spstart, spindex);
               if (LOG.isDebugEnabled()) {
-                LOG.debug("Running combine processor");
+                LOG.debug(outputContext.getDestinationVertexName() + ": " + "Running combine processor");
               }
               runCombineProcessor(kvIter, writer);
             }
@@ -892,6 +926,9 @@ public class DefaultSorter extends ExternalSorter implements IndexedSortable {
                   writer.getRawLength(),
                   writer.getCompressedLength());
           spillRec.putIndex(rec, i);
+          if (!isFinalMergeEnabled() && reportPartitionStats()) {
+            partitionStats[i] += writer.getCompressedLength();
+          }
 
           writer = null;
         } finally {
@@ -911,7 +948,7 @@ public class DefaultSorter extends ExternalSorter implements IndexedSortable {
         totalIndexCacheMemory +=
           spillRec.size() * MAP_OUTPUT_INDEX_RECORD_LENGTH;
       }
-      LOG.info("Finished spill " + numSpills);
+      LOG.info(outputContext.getDestinationVertexName() + ": " + "Finished spill " + numSpills);
       ++numSpills;
       if (!isFinalMergeEnabled()) {
         numShuffleChunks.setValue(numSpills);
@@ -1094,9 +1131,11 @@ public class DefaultSorter extends ExternalSorter implements IndexedSortable {
 
     String pathComponent = (outputContext.getUniqueIdentifier() + "_" + index);
     ShuffleUtils.generateEventOnSpill(events, isFinalMergeEnabled(), isLastEvent,
-        outputContext, index, spillRecord, partitions, sendEmptyPartitionDetails, pathComponent);
+        outputContext, index, spillRecord, partitions, sendEmptyPartitionDetails, pathComponent,
+        partitionStats);
 
-    LOG.info("Adding spill event for spill (final update=" + isLastEvent + "), spillId=" + index);
+    LOG.info(outputContext.getDestinationVertexName() + ": " +
+        "Adding spill event for spill (final update=" + isLastEvent + "), spillId=" + index);
 
     if (sendEvent) {
       outputContext.sendEvents(events);
@@ -1141,25 +1180,33 @@ public class DefaultSorter extends ExternalSorter implements IndexedSortable {
       finalOutFileSize += rfs.getFileStatus(filename[i]).getLen();
     }
     if (numSpills == 1) { //the spill is the final output
+      TezSpillRecord spillRecord = null;
       if (isFinalMergeEnabled()) {
         finalOutputFile = mapOutputFile.getOutputFileForWriteInVolume(filename[0]);
         finalIndexFile = mapOutputFile.getOutputIndexFileForWriteInVolume(filename[0]);
         sameVolRename(filename[0], finalOutputFile);
         if (indexCacheList.size() == 0) {
           sameVolRename(spillFileIndexPaths.get(0), finalIndexFile);
+          spillRecord = new TezSpillRecord(finalIndexFile, conf);
         } else {
-          indexCacheList.get(0).writeToFile(finalIndexFile, conf);
+          spillRecord = indexCacheList.get(0);
+          spillRecord.writeToFile(finalIndexFile, conf);
         }
       } else {
         List<Event> events = Lists.newLinkedList();
         //Since there is only one spill, spill record would be present in cache.
-        TezSpillRecord spillRecord = indexCacheList.get(0);
+        spillRecord = indexCacheList.get(0);
         Path indexPath = mapOutputFile.getSpillIndexFileForWrite(numSpills-1, partitions *
             MAP_OUTPUT_INDEX_RECORD_LENGTH);
         spillRecord.writeToFile(indexPath, conf);
         maybeSendEventForSpill(events, true, spillRecord, 0, true);
         fileOutputByteCounter.increment(rfs.getFileStatus(spillFilePaths.get(0)).getLen());
         //No need to populate finalIndexFile, finalOutputFile etc when finalMerge is disabled
+      }
+      if (spillRecord != null && reportPartitionStats()) {
+        for(int i=0; i < spillRecord.size(); i++) {
+          partitionStats[i] += spillRecord.getIndex(i).getPartLength();
+        }
       }
       numShuffleChunks.setValue(numSpills);
       return;
@@ -1237,6 +1284,7 @@ public class DefaultSorter extends ExternalSorter implements IndexedSortable {
         List<Segment> segmentList =
           new ArrayList<Segment>(numSpills);
         for(int i = 0; i < numSpills; i++) {
+          outputContext.notifyProgress();
           TezIndexRecord indexRecord = indexCacheList.get(i).getIndex(parts);
 
           Segment s =
@@ -1246,7 +1294,8 @@ public class DefaultSorter extends ExternalSorter implements IndexedSortable {
           segmentList.add(i, s);
 
           if (LOG.isDebugEnabled()) {
-            LOG.debug("TaskIdentifier=" + taskIdentifier + " Partition=" + parts +
+            LOG.debug(outputContext.getDestinationVertexName() + ": "
+                + "TaskIdentifier=" + taskIdentifier + " Partition=" + parts +
                 "Spill =" + i + "(" + indexRecord.getStartOffset() + "," +
                 indexRecord.getRawLength() + ", " +
                 indexRecord.getPartLength() + ")");
@@ -1264,7 +1313,7 @@ public class DefaultSorter extends ExternalSorter implements IndexedSortable {
                        segmentList, mergeFactor,
                        new Path(taskIdentifier),
                        (RawComparator)ConfigUtils.getIntermediateOutputKeyComparator(conf),
-                       nullProgressable, sortSegments, true,
+                       progressable, sortSegments, true,
                        null, spilledRecordsCounter, additionalSpillBytesRead,
                        null); // Not using any Progress in TezMerger. Should just work.
 
@@ -1275,7 +1324,7 @@ public class DefaultSorter extends ExternalSorter implements IndexedSortable {
                 spilledRecordsCounter, null);
         if (combiner == null || numSpills < minSpillsForCombine) {
           TezMerger.writeFile(kvIter, writer,
-              nullProgressable, TezRuntimeConfiguration.TEZ_RUNTIME_RECORDS_BEFORE_PROGRESS_DEFAULT);
+              progressable, TezRuntimeConfiguration.TEZ_RUNTIME_RECORDS_BEFORE_PROGRESS_DEFAULT);
         } else {
           runCombineProcessor(kvIter, writer);
         }
@@ -1289,6 +1338,9 @@ public class DefaultSorter extends ExternalSorter implements IndexedSortable {
                 writer.getRawLength(),
                 writer.getCompressedLength());
         spillRec.putIndex(rec, parts);
+        if (reportPartitionStats()) {
+          partitionStats[parts] += writer.getCompressedLength();
+        }
       }
       numShuffleChunks.setValue(1); //final merge has happened
       spillRec.writeToFile(finalIndexFile, conf);

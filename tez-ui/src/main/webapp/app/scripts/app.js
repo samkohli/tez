@@ -190,6 +190,93 @@ App.ready = function () {
       return typeName + '?dagID=%@&vertexID=%@';
     }
   });
+
+  // v2 version of am web services
+  App.DagInfoAdapter = App.AMInfoAdapter.extend({
+    namespace: App.Configs.restNamespace.aminfoV2,
+    findQuery: function(store, type, query) {
+      var record = query.metadata;
+      delete query.metadata;
+      return this.ajax(
+        this.buildURL(Ember.String.pluralize(type.typeKey),
+          record.dagID, Em.Object.create(record)), 'GET', { data: query});
+    },
+    buildURL: function(type, id, record) {
+      var url = this._super(type, undefined, record);
+      return url.replace('__app_id__', record.get('appID'))
+        .fmt(id, record.get('counters'));
+    },
+    pathForType: function(typeName) {
+      return 'dagInfo?dagID=%@&counters=%@';
+    }
+  });
+
+
+  App.VertexInfoAdapter = App.AMInfoAdapter.extend({
+    namespace: App.Configs.restNamespace.aminfoV2,
+    findQuery: function(store, type, query) {
+      var record = query.metadata;
+      delete query.metadata;
+      return this.ajax(
+        this.buildURL(Ember.String.pluralize(type.typeKey),
+          record.vertexID, Em.Object.create(record)), 'GET', { data: query});
+    },
+    buildURL: function(type, id, record) {
+      var url = this._super(type, undefined, record);
+      return url.replace('__app_id__', record.get('appID'))
+        .fmt(record.get('dagID'), id, record.get('counters'));
+    },
+    pathForType: function(typeName) {
+      return 'verticesInfo?dagID=%@&vertexID=%@&counters=%@';
+    }
+  });
+
+  App.TaskInfoAdapter = App.AMInfoAdapter.extend({
+    namespace: App.Configs.restNamespace.aminfoV2,
+    findQuery: function(store, type, query) {
+      var record = query.metadata;
+      delete query.metadata;
+      return this.ajax(
+        this.buildURL(Ember.String.pluralize(type.typeKey),
+          record.taskID, Em.Object.create(record)), 'GET', { data: query});
+    },
+    buildURL: function(type, id, record) {
+      var url = this._super(type, undefined, record);
+      return url.replace('__app_id__', record.get('appID'))
+        .fmt(record.get('dagID'), id, record.get('counters'));
+    },
+    pathForType: function(typeName) {
+      return 'tasksInfo?dagID=%@&taskID=%@&counters=%@';
+    }
+  });
+
+  App.AttemptInfoAdapter = App.AMInfoAdapter.extend({
+    namespace: App.Configs.restNamespace.aminfoV2,
+    findQuery: function(store, type, query) {
+      var record = query.metadata;
+      delete query.metadata;
+      return this.ajax(
+        this.buildURL(Ember.String.pluralize(type.typeKey),
+          record.attemptID, Em.Object.create(record)), 'GET', { data: query});
+    },
+    buildURL: function(type, id, record) {
+      var url = this._super(type, undefined, record);
+      return url.replace('__app_id__', record.get('appID'))
+        .fmt(record.get('dagID'), record.get('taskID'), id, record.get('counters'));
+    },
+    pathForType: function(typeName) {
+      return 'attemptsInfo?dagID=%@&taskID=%@&attemptID=%@&counters=%@';
+    }
+  });
+
+  App.ClusterAppAdapter = DS.RESTAdapter.extend({
+    host: App.env.RMWebUrl,
+    namespace: App.Configs.restNamespace.cluster,
+    pathForType: function() {
+      return 'apps';
+    }
+  });
+
 };
 
 $.ajaxPrefilter(function(options, originalOptions, jqXHR) {
@@ -204,13 +291,16 @@ $.ajaxSetup({
 require('scripts/default-configs');
 
 require('scripts/translations');
-require('scripts/mixins/*');
+require('scripts/helpers/pollster');
 require('scripts/helpers/*');
+require('scripts/mixins/*');
 
 require('scripts/router');
 require('scripts/views/**/*');
 require('scripts/models/**/*');
 
+require('scripts/controllers/base-controller');
+require('scripts/controllers/polling-controller');
 require('scripts/controllers/table-page-controller');
 require('scripts/controllers/**/*');
 

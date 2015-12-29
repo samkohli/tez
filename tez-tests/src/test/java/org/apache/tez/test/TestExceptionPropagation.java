@@ -79,6 +79,7 @@ import org.apache.tez.runtime.api.LogicalOutput;
 import org.apache.tez.runtime.api.OutputContext;
 import org.apache.tez.runtime.api.ProcessorContext;
 import org.apache.tez.runtime.api.Reader;
+import org.apache.tez.runtime.api.TaskAttemptIdentifier;
 import org.apache.tez.runtime.api.Writer;
 import org.apache.tez.runtime.api.events.DataMovementEvent;
 import org.apache.tez.runtime.api.events.InputDataInformationEvent;
@@ -224,7 +225,11 @@ public class TestExceptionPropagation {
         DAGStatus dagStatus = dagClient.waitForCompletion();
         String diagnostics = StringUtils.join(dagStatus.getDiagnostics(), ",");
         LOG.info("Diagnostics:" + diagnostics);
-        assertTrue(diagnostics.contains(exLocation.name()));
+        if (exLocation == ExceptionLocation.PROCESSOR_COUNTER_EXCEEDED) {
+          assertTrue(diagnostics.contains("Too many counters"));
+        } else {
+          assertTrue(diagnostics.contains(exLocation.name()));
+        }
       }
     } finally {
       stopSessionClient();
@@ -301,6 +306,7 @@ public class TestExceptionPropagation {
     // PROCESSOR_HANDLE_EVENTS
     PROCESSOR_RUN_ERROR, PROCESSOR_CLOSE_ERROR, PROCESSOR_INITIALIZE_ERROR,
     PROCESSOR_RUN_EXCEPTION, PROCESSOR_CLOSE_EXCEPTION, PROCESSOR_INITIALIZE_EXCEPTION,
+    PROCESSOR_COUNTER_EXCEEDED,
 
     // VM
     VM_INITIALIZE, VM_ON_ROOTVERTEX_INITIALIZE,VM_ON_SOURCETASK_COMPLETED, VM_ON_VERTEX_STARTED,
@@ -625,6 +631,11 @@ public class TestExceptionPropagation {
         throw new Error(this.exLocation.name());
       } else if (this.exLocation == ExceptionLocation.PROCESSOR_RUN_EXCEPTION) {
         throw new Exception(this.exLocation.name());
+      } else if (this.exLocation == ExceptionLocation.PROCESSOR_COUNTER_EXCEEDED) {
+        // simulate the counter limitation exceeded
+        for (int i=0;i< TezConfiguration.TEZ_COUNTERS_MAX_DEFAULT+1; ++i) {
+          getContext().getCounters().findCounter("mycounter", "counter_"+i).increment(1);
+        }
       }
     }
 
@@ -686,7 +697,7 @@ public class TestExceptionPropagation {
     }
 
     @Override
-    public void onVertexStarted(Map<String, List<Integer>> completions) {
+    public void onVertexStarted(List<TaskAttemptIdentifier> completions) {
       if (this.exLocation == ExceptionLocation.VM_ON_VERTEX_STARTED) {
         throw new RuntimeException(this.exLocation.name());
       }
@@ -729,11 +740,11 @@ public class TestExceptionPropagation {
     }
 
     @Override
-    public void onSourceTaskCompleted(String srcVertexName, Integer attemptId) {
+    public void onSourceTaskCompleted(TaskAttemptIdentifier attempt) {
       if (this.exLocation == ExceptionLocation.VM_ON_SOURCETASK_COMPLETED) {
         throw new RuntimeException(this.exLocation.name());
       }
-      super.onSourceTaskCompleted(srcVertexName, attemptId);
+      super.onSourceTaskCompleted(attempt);
     }
 
     @Override

@@ -45,6 +45,8 @@ public class ATSConstants {
   public static final String NODE_ID = "nodeId";
   public static final String NODE_HTTP_ADDRESS = "nodeHttpAddress";
   public static final String USER = "user";
+  public static final String CALLER_CONTEXT_ID = "callerId";
+  public static final String CALLER_CONTEXT_TYPE = "callerType";
 
   /* Keys used in other info */
   public static final String APP_SUBMIT_TIME = "appSubmitTime";
@@ -53,10 +55,13 @@ public class ATSConstants {
   public static final String DAG_PLAN = "dagPlan";
   public static final String DAG_NAME = "dagName";
   public static final String DAG_STATE = "dagState";
+  public static final String DAG_AM_WEB_SERVICE_VERSION = "amWebServiceVersion";
   public static final String RECOVERY_FAILURE_REASON = "recoveryFailureReason";
   public static final String VERTEX_NAME = "vertexName";
   public static final String VERTEX_NAME_ID_MAPPING = "vertexNameIdMapping";
   public static final String SCHEDULED_TIME = "scheduledTime";
+  public static final String CREATION_TIME = "creationTime";
+  public static final String ALLOCATION_TIME = "allocationTime";
   public static final String INIT_REQUESTED_TIME = "initRequestedTime";
   public static final String INIT_TIME = "initTime";
   public static final String START_REQUESTED_TIME = "startRequestedTime";
@@ -81,7 +86,9 @@ public class ATSConstants {
   public static final String IN_PROGRESS_LOGS_URL = "inProgressLogsURL";
   public static final String COMPLETED_LOGS_URL = "completedLogsURL";
   public static final String EXIT_STATUS = "exitStatus";
+  public static final String LAST_DATA_EVENTS = "lastDataEvents";
   public static final String UPDATED_EDGE_MANAGERS = "updatedEdgeManagers";
+  public static final String CREATION_CAUSAL_ATTEMPT = "creationCausalAttempt";
 
   /* Counters-related keys */
   public static final String COUNTER_GROUPS = "counterGroups";
@@ -103,12 +110,18 @@ public class ATSConstants {
       "yarn.timeline-service.webapp.https.address";
 
   /* History text related Keys */
-  public static final String DESCRIPTION = "desc";
+  public static final String DESC = "desc";
   public static final String CONFIG = "config";
 
   public static final String TEZ_VERSION = "tezVersion";
   public static final String VERSION = "version";
   public static final String REVISION = "revision";
   public static final String BUILD_TIME = "buildTime";
+
+  /* Caller Context Related Keys */
+  public static final String CONTEXT = "context";
+  public static final String CALLER_ID = "callerId";
+  public static final String CALLER_TYPE = "callerType";
+  public static final String DESCRIPTION = "description";
 
 }

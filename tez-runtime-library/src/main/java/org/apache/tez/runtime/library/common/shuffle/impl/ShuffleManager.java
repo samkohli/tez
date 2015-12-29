@@ -141,8 +141,10 @@ public class ShuffleManager implements FetcherCallback {
   private final boolean ifileReadAhead;
   private final int ifileReadAheadLength;
   
-  private final String srcNameTrimmed; 
-  
+  private final String srcNameTrimmed;
+
+  private final int maxTaskOutputAtOnce;
+
   private final AtomicBoolean isShutdown = new AtomicBoolean(false);
 
   private final TezCounter shuffledInputsCounter;
@@ -224,11 +226,11 @@ public class ShuffleManager implements FetcherCallback {
     ExecutorService fetcherRawExecutor = Executors.newFixedThreadPool(
         numFetchers,
         new ThreadFactoryBuilder().setDaemon(true)
-            .setNameFormat("Fetcher [" + srcNameTrimmed + "] #%d").build());
+            .setNameFormat("Fetcher {" + srcNameTrimmed + "} #%d").build());
     this.fetcherExecutor = MoreExecutors.listeningDecorator(fetcherRawExecutor);
     
     ExecutorService schedulerRawExecutor = Executors.newFixedThreadPool(1, new ThreadFactoryBuilder()
-        .setDaemon(true).setNameFormat("ShuffleRunner [" + srcNameTrimmed + "]").build());
+        .setDaemon(true).setNameFormat("ShuffleRunner {" + srcNameTrimmed + "}").build());
     this.schedulerExecutor = MoreExecutors.listeningDecorator(schedulerRawExecutor);
     this.schedulerCallable = new RunShuffleCallable(conf);
     
@@ -254,17 +256,25 @@ public class ShuffleManager implements FetcherCallback {
         inputContext.getServiceProviderMetaData(ShuffleUtils.SHUFFLE_HANDLER_SERVICE_ID);
     this.shufflePort = ShuffleUtils.deserializeShuffleProviderMetaData(shuffleMetaData);
 
+    /**
+     * Setting to very high val can lead to Http 400 error. Cap it to 75; every attempt id would
+     * be approximately 48 bytes; 48 * 75 = 3600 which should give some room for other info in URL.
+     */
+    this.maxTaskOutputAtOnce = Math.max(1, Math.min(75, conf.getInt(
+        TezRuntimeConfiguration.TEZ_RUNTIME_SHUFFLE_FETCH_MAX_TASK_OUTPUT_AT_ONCE,
+        TezRuntimeConfiguration.TEZ_RUNTIME_SHUFFLE_FETCH_MAX_TASK_OUTPUT_AT_ONCE_DEFAULT)));
+
     Arrays.sort(this.localDisks);
 
     shuffleInfoEventsMap = new ConcurrentHashMap<InputIdentifier, ShuffleEventInfo>();
 
-    LOG.info(this.getClass().getSimpleName() + " : numInputs=" + numInputs + ", compressionCodec="
+    LOG.info(srcNameTrimmed + ": numInputs=" + numInputs + ", compressionCodec="
         + (codec == null ? "NoCompressionCodec" : codec.getClass().getName()) + ", numFetchers="
         + numFetchers + ", ifileBufferSize=" + ifileBufferSize + ", ifileReadAheadEnabled="
         + ifileReadAhead + ", ifileReadAheadLength=" + ifileReadAheadLength +", "
         + "localDiskFetchEnabled=" + localDiskFetchEnabled + ", "
         + "sharedFetchEnabled=" + sharedFetchEnabled + ", "
-        + httpConnectionParams.toString());
+        + httpConnectionParams.toString() + ", maxTaskOutputAtOnce=" + maxTaskOutputAtOnce);
   }
 
   public void run() throws IOException {
@@ -305,7 +315,7 @@ public class ShuffleManager implements FetcherCallback {
         }
 
         if (LOG.isDebugEnabled()) {
-          LOG.debug("NumCompletedInputs: " + numCompletedInputs);
+          LOG.debug(srcNameTrimmed + ": " + "NumCompletedInputs: " + numCompletedInputs);
         }
         if (numCompletedInputs.get() < numInputs && !isShutdown.get()) {
           lock.lock();
@@ -318,7 +328,7 @@ public class ShuffleManager implements FetcherCallback {
                 inputHost = pendingHosts.take();
               } catch (InterruptedException e) {
                 if (isShutdown.get()) {
-                  LOG.info("Interrupted and hasBeenShutdown, Breaking out of ShuffleScheduler Loop");
+                  LOG.info(srcNameTrimmed + ": " + "Interrupted and hasBeenShutdown, Breaking out of ShuffleScheduler Loop");
                   Thread.currentThread().interrupt();
                   break;
                 } else {
@@ -326,14 +336,13 @@ public class ShuffleManager implements FetcherCallback {
                 }
               }
               if (LOG.isDebugEnabled()) {
-                LOG.debug("Processing pending host: " + inputHost.toDetailedString());
+                LOG.debug(srcNameTrimmed + ": " + "Processing pending host: " + inputHost.toDetailedString());
               }
               if (inputHost.getNumPendingInputs() > 0 && !isShutdown.get()) {
-                LOG.info("Scheduling fetch for inputHost: " + inputHost.getIdentifier());
                 Fetcher fetcher = constructFetcherForHost(inputHost, conf);
                 runningFetchers.add(fetcher);
                 if (isShutdown.get()) {
-                  LOG.info("hasBeenShutdown, Breaking out of ShuffleScheduler Loop");
+                  LOG.info(srcNameTrimmed + ": " + "hasBeenShutdown, Breaking out of ShuffleScheduler Loop");
                   break;
                 }
                 ListenableFuture<FetchResult> future = fetcherExecutor
@@ -344,7 +353,7 @@ public class ShuffleManager implements FetcherCallback {
                 }
               } else {
                 if (LOG.isDebugEnabled()) {
-                  LOG.debug("Skipping host: " + inputHost.getIdentifier()
+                  LOG.debug(srcNameTrimmed + ": " + "Skipping host: " + inputHost.getIdentifier()
                       + " since it has no inputs to process");
                 }
               }
@@ -355,8 +364,7 @@ public class ShuffleManager implements FetcherCallback {
         }
       }
       shufflePhaseTime.setValue(System.currentTimeMillis() - startTime);
-      LOG.info("Shutting down FetchScheduler, Was Interrupted: " + Thread.currentThread().isInterrupted());
-      // TODO NEWTEZ Maybe clean up inputs.
+      LOG.info(srcNameTrimmed + ": " + "Shutting down FetchScheduler, Was Interrupted: " + Thread.currentThread().isInterrupted());
       if (!fetcherExecutor.isShutdown()) {
         fetcherExecutor.shutdownNow();
       }
@@ -393,7 +401,7 @@ public class ShuffleManager implements FetcherCallback {
     }
 
     FetcherBuilder fetcherBuilder = new FetcherBuilder(ShuffleManager.this,
-      httpConnectionParams, inputManager, inputContext.getApplicationId(),
+      httpConnectionParams, inputManager, inputContext.getApplicationId(), inputContext.getDagIdentifier(),
         jobTokenSecretMgr, srcNameTrimmed, conf, localFs, localDirAllocator,
         lockDisk, localDiskFetchEnabled, sharedFetchEnabled,
         localhostName, shufflePort, asyncHttp);
@@ -407,6 +415,7 @@ public class ShuffleManager implements FetcherCallback {
     // remove from the obsolete list.
     List<InputAttemptIdentifier> pendingInputsForHost = inputHost
         .clearAndGetPendingInputs();
+    int includedMaps = 0;
     for (Iterator<InputAttemptIdentifier> inputIter = pendingInputsForHost
         .iterator(); inputIter.hasNext();) {
       InputAttemptIdentifier input = inputIter.next();
@@ -424,14 +433,27 @@ public class ShuffleManager implements FetcherCallback {
       // Avoid adding attempts which have been marked as OBSOLETE 
       if (obsoletedInputs.contains(input)) {
         inputIter.remove();
+        continue;
+      }
+
+      // Check if max threshold is met
+      if (includedMaps >= maxTaskOutputAtOnce) {
+        inputIter.remove();
+        inputHost.addKnownInput(input); //add to inputHost
+      } else {
+        includedMaps++;
       }
     }
-    // TODO NEWTEZ Maybe limit the number of inputs being given to a single
-    // fetcher, especially in the case where #hosts < #fetchers
+    if (inputHost.getNumPendingInputs() > 0) {
+      pendingHosts.add(inputHost); //add it to queue
+    }
     fetcherBuilder.assignWork(inputHost.getHost(), inputHost.getPort(),
         inputHost.getSrcPhysicalIndex(), pendingInputsForHost);
-    LOG.info("Created Fetcher for host: " + inputHost.getHost()
-        + ", with inputs: " + pendingInputsForHost);
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("Created Fetcher for host: " + inputHost.getHost()
+          + ", info: " + inputHost.getAdditionalInfo()
+          + ", with inputs: " + pendingInputsForHost);
+    }
     return fetcherBuilder.build();
   }
   
@@ -450,7 +472,7 @@ public class ShuffleManager implements FetcherCallback {
       }
     }
     if (LOG.isDebugEnabled()) {
-      LOG.debug("Adding input: " + srcAttemptIdentifier + ", to host: " + host);
+      LOG.debug(srcNameTrimmed + ": " + "Adding input: " + srcAttemptIdentifier + ", to host: " + host);
     }
 
     if (!validateInputAttemptForPipelinedShuffle(srcAttemptIdentifier)) {
@@ -480,7 +502,9 @@ public class ShuffleManager implements FetcherCallback {
   public void addCompletedInputWithNoData(
       InputAttemptIdentifier srcAttemptIdentifier) {
     InputIdentifier inputIdentifier = srcAttemptIdentifier.getInputIdentifier();
-    LOG.info("No input data exists for SrcTask: " + inputIdentifier + ". Marking as complete.");
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("No input data exists for SrcTask: " + inputIdentifier + ". Marking as complete.");
+    }
     
     if (!completedInputSet.contains(inputIdentifier)) {
       synchronized (completedInputSet) {
@@ -553,8 +577,10 @@ public class ShuffleManager implements FetcherCallback {
     }
 
     boolean isDone() {
-      LOG.info("finalEventId=" + finalEventId + ", eventsProcessed cardinality=" +
-          eventsProcessed.cardinality());
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("finalEventId=" + finalEventId + ", eventsProcessed cardinality=" +
+            eventsProcessed.cardinality());
+      }
       return ((finalEventId != -1) && (finalEventId + 1) == eventsProcessed.cardinality());
     }
 
@@ -578,6 +604,7 @@ public class ShuffleManager implements FetcherCallback {
       lock.unlock();
     }
     
+    inputContext.notifyProgress();
     boolean committed = false;
     if (!completedInputSet.contains(inputIdentifier)) {
       synchronized (completedInputSet) {
@@ -610,10 +637,10 @@ public class ShuffleManager implements FetcherCallback {
           lock.lock();
           try {
             totalBytesShuffledTillNow += fetchedBytes;
+            logProgress();
           } finally {
             lock.unlock();
           }
-          logProgress();
         }
       }
     }
@@ -730,10 +757,11 @@ public class ShuffleManager implements FetcherCallback {
       InputAttemptIdentifier srcAttemptIdentifier, boolean connectFailed) {
     // TODO NEWTEZ. Implement logic to report fetch failures after a threshold.
     // For now, reporting immediately.
-    LOG.info("Fetch failed for src: " + srcAttemptIdentifier
+    LOG.info(srcNameTrimmed + ": " + "Fetch failed for src: " + srcAttemptIdentifier
         + "InputIdentifier: " + srcAttemptIdentifier + ", connectFailed: "
         + connectFailed);
     failedShufflesCounter.increment(1);
+    inputContext.notifyProgress();
     if (srcAttemptIdentifier == null) {
       reportFatalError(null, "Received fetchFailure for an unknown src (null)");
     } else {
@@ -757,7 +785,7 @@ public class ShuffleManager implements FetcherCallback {
     if (Thread.currentThread().isInterrupted()) {
       //TODO: need to cleanup all FetchedInput (DiskFetchedInput, LocalDisFetchedInput), lockFile
       //As of now relying on job cleanup (when all directories would be cleared)
-      LOG.info("Thread interrupted. Need to cleanup the local dirs");
+      LOG.info(srcNameTrimmed + ": " + "Thread interrupted. Need to cleanup the local dirs");
     }
     if (!isShutdown.getAndSet(true)) {
       // Shut down any pending fetchers
@@ -869,16 +897,23 @@ public class ShuffleManager implements FetcherCallback {
     }
   }
 
-  private void logProgress() {
-    double mbs = (double) totalBytesShuffledTillNow / (1024 * 1024);
-    int inputsDone = numCompletedInputs.get();
-    long secsSinceStart = (System.currentTimeMillis() - startTime) / 1000 + 1;
+  private final AtomicInteger nextProgressLineEventCount = new AtomicInteger(0);
 
-    double transferRate = mbs / secsSinceStart;
-    LOG.info("copy(" + inputsDone + " (spillsFetched=" + numFetchedSpills.get() + ") of " +
-        numInputs +
-        ". Transfer rate (CumulativeDataFetched/TimeSinceInputStarted)) "
-        + mbpsFormat.format(transferRate) + " MB/s)");
+  private void logProgress() {
+    int inputsDone = numCompletedInputs.get();
+
+    if (inputsDone > nextProgressLineEventCount.get() || inputsDone == numInputs) {
+      nextProgressLineEventCount.addAndGet(50);
+      double mbs = (double) totalBytesShuffledTillNow / (1024 * 1024);
+      long secsSinceStart = (System.currentTimeMillis() - startTime) / 1000 + 1;
+
+      double transferRate = mbs / secsSinceStart;
+      LOG.info("copy(" + inputsDone + " (spillsFetched=" + numFetchedSpills.get() + ") of " +
+          numInputs +
+          ". Transfer rate (CumulativeDataFetched/TimeSinceInputStarted)) "
+          + mbpsFormat.format(transferRate) + " MB/s)");
+
+    }
   }
 
 
@@ -886,15 +921,17 @@ public class ShuffleManager implements FetcherCallback {
 
     @Override
     public void onSuccess(Void result) {
-      LOG.info("Scheduler thread completed");
+      LOG.info(srcNameTrimmed + ": " + "Scheduler thread completed");
     }
 
     @Override
     public void onFailure(Throwable t) {
       if (isShutdown.get()) {
-        LOG.info("Already shutdown. Ignoring error: " + t);
+        if (LOG.isDebugEnabled()) {
+          LOG.debug(srcNameTrimmed + ": " + "Already shutdown. Ignoring error: " + t);
+        }
       } else {
-        LOG.error("Scheduler failed with error: ", t);
+        LOG.error(srcNameTrimmed + ": " + "Scheduler failed with error: ", t);
         inputContext.fatalError(t, "Shuffle Scheduler Failed");
       }
     }
@@ -923,7 +960,9 @@ public class ShuffleManager implements FetcherCallback {
     public void onSuccess(FetchResult result) {
       fetcher.shutdown();
       if (isShutdown.get()) {
-        LOG.info("Already shutdown. Ignoring event from fetcher");
+        if (LOG.isDebugEnabled()) {
+          LOG.debug(srcNameTrimmed + ": " + "Already shutdown. Ignoring event from fetcher");
+        }
       } else {
         Iterable<InputAttemptIdentifier> pendingInputs = result.getPendingInputs();
         if (pendingInputs != null && pendingInputs.iterator().hasNext()) {
@@ -932,6 +971,7 @@ public class ShuffleManager implements FetcherCallback {
           for (InputAttemptIdentifier input : pendingInputs) {
             inputHost.addKnownInput(input);
           }
+          inputHost.setAdditionalInfo(result.getAdditionalInfo());
           pendingHosts.add(inputHost);
         }
         doBookKeepingForFetcherComplete();
@@ -943,9 +983,11 @@ public class ShuffleManager implements FetcherCallback {
       // Unsuccessful - the fetcher may not have shutdown correctly. Try shutting it down.
       fetcher.shutdown();
       if (isShutdown.get()) {
-        LOG.info("Already shutdown. Ignoring error from fetcher: " + t);
+        if (LOG.isDebugEnabled()) {
+          LOG.debug(srcNameTrimmed + ": " + "Already shutdown. Ignoring error from fetcher: " + t);
+        }
       } else {
-        LOG.error("Fetcher failed with error: ", t);
+        LOG.error(srcNameTrimmed + ": " + "Fetcher failed with error: ", t);
         shuffleError = t;
         inputContext.fatalError(t, "Fetch failed");
         doBookKeepingForFetcherComplete();

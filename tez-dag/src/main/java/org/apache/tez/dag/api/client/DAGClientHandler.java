@@ -79,9 +79,11 @@ public class DAGClientHandler {
   }
 
   DAG getDAG(String dagIdStr) throws TezException {
-    TezDAGID dagId = TezDAGID.fromString(dagIdStr);
-    if (dagId == null) {
-      throw new TezException("Bad dagId: " + dagIdStr);
+    TezDAGID dagId;
+    try {
+      dagId = TezDAGID.fromString(dagIdStr);
+    } catch (IllegalArgumentException e) {
+      throw new TezException("Bad dagId: " + dagIdStr, e);
     }
 
     DAG currentDAG = getCurrentDAG();
@@ -118,7 +120,7 @@ public class DAGClientHandler {
     return dagAppMaster.submitDAGToAppMaster(dagPlan, additionalAmResources);
   }
 
-  public synchronized void shutdownAM() {
+  public synchronized void shutdownAM() throws TezException {
     LOG.info("Received message to shutdown AM");
     if (dagAppMaster != null) {
       dagAppMaster.shutdownTezAM();
