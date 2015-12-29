@@ -143,8 +143,7 @@ public class WordCount extends TezExampleBase {
     // Create the descriptor that describes the input data to Tez. Using MRInput to read text 
     // data from the given input path. The TextInputFormat is used to read the text data.
     DataSourceDescriptor dataSource = MRInput.createConfigBuilder(new Configuration(tezConf),
-        TextInputFormat.class, inputPath).groupSplits(!isDisableSplitGrouping())
-          .generateSplitsInAM(!isGenerateSplitInClient()).build();
+        TextInputFormat.class, inputPath).groupSplits(!isDisableSplitGrouping()).build();
 
     // Create a descriptor that describes the output data to Tez. Using MROoutput to write text
     // data to the given output path. The TextOutputFormat is used to write the text data.

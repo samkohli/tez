@@ -19,24 +19,13 @@
 package org.apache.tez.history.parser.datamodel;
 
 import com.google.common.base.Preconditions;
-import com.google.common.base.Strings;
-import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
-import com.google.common.collect.Ordering;
-
-import org.apache.hadoop.util.StringInterner;
-import org.apache.tez.common.ATSConstants;
 import org.apache.tez.common.counters.DAGCounter;
 import org.apache.tez.common.counters.TaskCounter;
 import org.apache.tez.common.counters.TezCounter;
-import org.apache.tez.dag.api.oldrecords.TaskAttemptState;
-import org.apache.tez.history.parser.utils.Utils;
 import org.codehaus.jettison.json.JSONException;
 import org.codehaus.jettison.json.JSONObject;
 
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.List;
 import java.util.Map;
 
 import static org.apache.hadoop.classification.InterfaceStability.Evolving;
@@ -46,43 +35,20 @@ import static org.apache.hadoop.classification.InterfaceAudience.Public;
 @Evolving
 public class TaskAttemptInfo extends BaseInfo {
 
-  private static final String SUCCEEDED = StringInterner.weakIntern(TaskAttemptState.SUCCEEDED.name());
-
   private final String taskAttemptId;
   private final long startTime;
   private final long endTime;
   private final String diagnostics;
-
-  private final long creationTime;
-  private final long allocationTime;
+  private final String successfulAttemptId;
+  private final long scheduledTime;
   private final String containerId;
   private final String nodeId;
   private final String status;
   private final String logUrl;
-  private final String creationCausalTA;
-  private final String terminationCause;
-  private final long executionTimeInterval;
-  // this list is in time order - array list for easy walking
-  private final ArrayList<DataDependencyEvent> lastDataEvents = Lists.newArrayList();
 
   private TaskInfo taskInfo;
 
   private Container container;
-  
-  public static class DataDependencyEvent {
-    String taId;
-    long timestamp;
-    public DataDependencyEvent(String id, long time) {
-      taId = id;
-      timestamp = time;
-    }
-    public long getTimestamp() {
-      return timestamp;
-    }
-    public String getTaskAttemptId() {
-      return taId;
-    }
-  }
 
   TaskAttemptInfo(JSONObject jsonObject) throws JSONException {
     super(jsonObject);
@@ -91,48 +57,23 @@ public class TaskAttemptInfo extends BaseInfo {
         jsonObject.getString(Constants.ENTITY_TYPE).equalsIgnoreCase
             (Constants.TEZ_TASK_ATTEMPT_ID));
 
-    taskAttemptId = StringInterner.weakIntern(jsonObject.optString(Constants.ENTITY));
+    taskAttemptId = jsonObject.optString(Constants.ENTITY);
 
     //Parse additional Info
     final JSONObject otherInfoNode = jsonObject.getJSONObject(Constants.OTHER_INFO);
     startTime = otherInfoNode.optLong(Constants.START_TIME);
     endTime = otherInfoNode.optLong(Constants.FINISH_TIME);
     diagnostics = otherInfoNode.optString(Constants.DIAGNOSTICS);
-    creationTime = otherInfoNode.optLong(Constants.CREATION_TIME);
-    creationCausalTA = StringInterner.weakIntern(
-        otherInfoNode.optString(Constants.CREATION_CAUSAL_ATTEMPT));
-    allocationTime = otherInfoNode.optLong(Constants.ALLOCATION_TIME);
-    containerId = StringInterner.weakIntern(otherInfoNode.optString(Constants.CONTAINER_ID));
+    successfulAttemptId = otherInfoNode.optString(Constants.SUCCESSFUL_ATTEMPT_ID);
+    scheduledTime = otherInfoNode.optLong(Constants.SCHEDULED_TIME);
+
+    containerId = otherInfoNode.optString(Constants.CONTAINER_ID);
     String id = otherInfoNode.optString(Constants.NODE_ID);
-    nodeId = StringInterner.weakIntern((id != null) ? (id.split(":")[0]) : "");
+    nodeId = (id != null) ? (id.split(":")[0]) : "";
     logUrl = otherInfoNode.optString(Constants.COMPLETED_LOGS_URL);
 
-    status = StringInterner.weakIntern(otherInfoNode.optString(Constants.STATUS));
+    status = otherInfoNode.optString(Constants.STATUS);
     container = new Container(containerId, nodeId);
-    if (otherInfoNode.has(Constants.LAST_DATA_EVENTS)) {
-      List<DataDependencyEvent> eventInfo = Utils.parseDataEventDependencyFromJSON(
-          otherInfoNode.optJSONObject(Constants.LAST_DATA_EVENTS));
-      long lastTime = 0;
-      for (DataDependencyEvent item : eventInfo) {
-        // check these are in time order
-        Preconditions.checkState(lastTime < item.getTimestamp());
-        lastTime = item.getTimestamp();
-        lastDataEvents.add(item);
-      }
-    }
-    terminationCause = StringInterner
-        .weakIntern(otherInfoNode.optString(ATSConstants.TASK_ATTEMPT_ERROR_ENUM));
-    executionTimeInterval = (endTime > startTime) ? (endTime - startTime) : 0;
-  }
-  
-  public static Ordering<TaskAttemptInfo> orderingOnAllocationTime() {
-    return Ordering.from(new Comparator<TaskAttemptInfo>() {
-      @Override
-      public int compare(TaskAttemptInfo o1, TaskAttemptInfo o2) {
-        return (o1.getAllocationTime() < o2.getAllocationTime() ? -1
-            : o1.getAllocationTime() > o2.getAllocationTime() ? 1 : 0);
-      }
-    });
   }
 
   void setTaskInfo(TaskInfo taskInfo) {
@@ -142,104 +83,38 @@ public class TaskAttemptInfo extends BaseInfo {
   }
 
   @Override
-  public final long getStartTimeInterval() {
-    return startTime - (getTaskInfo().getVertexInfo().getDagInfo().getStartTime());
+  public final long getStartTime() {
+    return startTime - (getTaskInfo().getVertexInfo().getDagInfo().getAbsStartTime());
   }
 
   @Override
-  public final long getFinishTimeInterval() {
-    return endTime - (getTaskInfo().getVertexInfo().getDagInfo().getStartTime());
-  }
-  
-  public final boolean isSucceeded() {
-    return status.equals(SUCCEEDED);
-  }
-  
-  public final List<DataDependencyEvent> getLastDataEvents() {
-    return lastDataEvents;
-  }
-  
-  public final long getExecutionTimeInterval() {
-    return executionTimeInterval;
-  }
-  
-  public final long getPostDataExecutionTimeInterval() {
-    if (getStartTime() > 0 && getFinishTime() > 0) {
-      // start time defaults to the actual start time
-      long postDataStartTime = startTime;
-      if (getLastDataEvents() != null && !getLastDataEvents().isEmpty()) {
-        // if last data event is after the start time then use last data event time
-        long lastEventTime = getLastDataEvents().get(getLastDataEvents().size()-1).getTimestamp();
-        postDataStartTime = startTime > lastEventTime ? startTime : lastEventTime;
-      }
-      return (getFinishTime() - postDataStartTime);
-    }
-    return -1;
+  public final long getFinishTime() {
+    return endTime - (getTaskInfo().getVertexInfo().getDagInfo().getAbsStartTime());
   }
 
-  public final long getAllocationToEndTimeInterval() {
-    return (endTime - allocationTime);
-  }
-  
-  public final long getAllocationToStartTimeInterval() {
-    return (startTime - allocationTime);
-  }
-  
-  public final long getCreationToAllocationTimeInterval() {
-    return (allocationTime - creationTime);
-  }
-
-  public final long getStartTime() {
+  public final long getAbsStartTime() {
     return startTime;
   }
 
-  public final long getFinishTime() {
+  public final long getAbsFinishTime() {
     return endTime;
   }
 
-  public final long getCreationTime() {
-    return creationTime;
+  public final long getAbsoluteScheduledTime() {
+    return scheduledTime;
   }
-  
-  public final DataDependencyEvent getLastDataEventInfo(long timeThreshold) {
-    for (int i=lastDataEvents.size()-1; i>=0; i--) {
-      // walk back in time until we get first event that happened before the threshold
-      DataDependencyEvent item = lastDataEvents.get(i);
-      if (item.getTimestamp() < timeThreshold) {
-        return item;
-      }
-    }
-    return null;
-  }
-  
+
   public final long getTimeTaken() {
-    return getFinishTimeInterval() - getStartTimeInterval();
+    return getFinishTime() - getStartTime();
   }
 
-  public final long getCreationTimeInterval() {
-    return creationTime - (getTaskInfo().getVertexInfo().getDagInfo().getStartTime());
-  }
-  
-  public final String getCreationCausalTA() {
-    return creationCausalTA;
-  }
-
-  public final long getAllocationTime() {
-    return allocationTime;
-  }
-  
-  public final String getShortName() {
-    return getTaskInfo().getVertexInfo().getVertexName() + " : " + 
-    taskAttemptId.substring(taskAttemptId.lastIndexOf('_', taskAttemptId.lastIndexOf('_') - 1) + 1);
+  public final long getScheduledTime() {
+    return scheduledTime - (getTaskInfo().getVertexInfo().getDagInfo().getAbsStartTime());
   }
 
   @Override
   public final String getDiagnostics() {
     return diagnostics;
-  }
-  
-  public final String getTerminationCause() {
-    return terminationCause;
   }
 
   public static TaskAttemptInfo create(JSONObject taskInfoObject) throws JSONException {
@@ -259,13 +134,6 @@ public class TaskAttemptInfo extends BaseInfo {
       return true;
     }
     return false;
-  }
-  
-  public final String getDetailedStatus() {
-    if (!Strings.isNullOrEmpty(getTerminationCause())) {
-      return getStatus() + ":" + getTerminationCause();
-    }
-    return getStatus();
   }
 
   public final TezCounter getLocalityInfo() {
@@ -296,6 +164,10 @@ public class TaskAttemptInfo extends BaseInfo {
 
   public final String getTaskAttemptId() {
     return taskAttemptId;
+  }
+
+  public final String getSuccessfulAttemptId() {
+    return successfulAttemptId;
   }
 
   public final String getNodeId() {
@@ -363,12 +235,13 @@ public class TaskAttemptInfo extends BaseInfo {
     StringBuilder sb = new StringBuilder();
     sb.append("[");
     sb.append("taskAttemptId=").append(getTaskAttemptId()).append(", ");
-    sb.append("creationTime=").append(getCreationTimeInterval()).append(", ");
-    sb.append("startTime=").append(getStartTimeInterval()).append(", ");
-    sb.append("finishTime=").append(getFinishTimeInterval()).append(", ");
+    sb.append("scheduledTime=").append(getScheduledTime()).append(", ");
+    sb.append("startTime=").append(getStartTime()).append(", ");
+    sb.append("finishTime=").append(getFinishTime()).append(", ");
     sb.append("timeTaken=").append(getTimeTaken()).append(", ");
     sb.append("events=").append(getEvents()).append(", ");
     sb.append("diagnostics=").append(getDiagnostics()).append(", ");
+    sb.append("successfulAttempId=").append(getSuccessfulAttemptId()).append(", ");
     sb.append("container=").append(getContainer()).append(", ");
     sb.append("nodeId=").append(getNodeId()).append(", ");
     sb.append("logURL=").append(getLogURL()).append(", ");

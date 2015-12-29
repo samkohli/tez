@@ -501,10 +501,10 @@ public class IFile {
     protected int recNo = 1;
     protected int originalKeyLength;
     protected int prevKeyLength;
-    byte keyBytes[] = new byte[0];
-
     protected int currentKeyLength;
     protected int currentValueLength;
+    byte keyBytes[] = new byte[0];
+
     long startPos;
 
     /**
@@ -564,26 +564,21 @@ public class IFile {
                   TezCounter readsCounter, TezCounter bytesReadCounter,
                   boolean readAhead, int readAheadLength,
                   int bufferSize, boolean isCompressed) throws IOException {
-      if (in != null) {
-        checksumIn = new IFileInputStream(in, length, readAhead,
-            readAheadLength/* , isCompressed */);
-        if (isCompressed && codec != null) {
-          decompressor = CodecPool.getDecompressor(codec);
-          if (decompressor != null) {
-            this.in = codec.createInputStream(checksumIn, decompressor);
-          } else {
-            LOG.warn("Could not obtain decompressor from CodecPool");
-            this.in = checksumIn;
-          }
+      checksumIn = new IFileInputStream(in, length, readAhead, readAheadLength/*, isCompressed*/);
+      if (isCompressed && codec != null) {
+        decompressor = CodecPool.getDecompressor(codec);
+        if (decompressor != null) {
+          this.in = codec.createInputStream(checksumIn, decompressor);
         } else {
+          LOG.warn("Could not obtain decompressor from CodecPool");
           this.in = checksumIn;
         }
-        startPos = checksumIn.getPosition();
       } else {
-        this.in = null;
+        this.in = checksumIn;
       }
 
       this.dataIn = new DataInputStream(this.in);
+      startPos = checksumIn.getPosition();
       this.readRecordsCounter = readsCounter;
       this.bytesReadCounter = bytesReadCounter;
       this.fileLength = length;

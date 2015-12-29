@@ -49,7 +49,6 @@ import org.apache.hadoop.io.DataInputByteBuffer;
 import org.apache.hadoop.security.Credentials;
 import org.apache.hadoop.security.token.Token;
 import org.apache.hadoop.yarn.api.ApplicationConstants;
-import org.apache.hadoop.yarn.api.ApplicationConstants.Environment;
 import org.apache.hadoop.yarn.api.records.ApplicationId;
 import org.apache.hadoop.yarn.api.records.ApplicationSubmissionContext;
 import org.apache.hadoop.yarn.api.records.ContainerLaunchContext;
@@ -58,7 +57,6 @@ import org.apache.hadoop.yarn.api.records.LocalResourceVisibility;
 import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.hadoop.yarn.exceptions.YarnException;
-import org.apache.hadoop.yarn.util.Records;
 import org.apache.tez.common.security.HistoryACLPolicyManager;
 import org.apache.tez.common.security.JobTokenIdentifier;
 import org.apache.tez.common.security.JobTokenSecretManager;
@@ -67,14 +65,13 @@ import org.apache.tez.dag.api.DAG;
 import org.apache.tez.dag.api.ProcessorDescriptor;
 import org.apache.tez.dag.api.TezConfiguration;
 import org.apache.tez.dag.api.TezConstants;
-import org.apache.tez.dag.api.TezException;
 import org.apache.tez.dag.api.TezUncheckedException;
 import org.apache.tez.dag.api.Vertex;
 import org.apache.tez.dag.api.records.DAGProtos.ConfigurationProto;
 import org.apache.tez.dag.api.records.DAGProtos.PlanKeyValuePair;
-import org.apache.tez.serviceplugins.api.ServicePluginsDescriptor;
 import org.junit.Assert;
 import org.junit.Test;
+
 /**
  * 
  */
@@ -207,42 +204,6 @@ public class TestTezClientUtils {
     assertFalse(localizedMap.isEmpty());
   }
 
-  @Test(timeout = 2000)
-  // this test checks if the priority field is set properly in the
-  // ApplicationSubmissionContext
-  public void testAppSubmissionContextForPriority() throws Exception {
-    TezConfiguration tezConf = new TezConfiguration();
-    int testpriority = 999;
-    ApplicationId appId = ApplicationId.newInstance(1000, 1);
-    Credentials credentials = new Credentials();
-    TezClientUtils.createSessionToken(appId.toString(),
-        new JobTokenSecretManager(), credentials);
-    tezConf.setBoolean(TezConfiguration.TEZ_IGNORE_LIB_URIS, true);
-    Map<String, LocalResource> m = new HashMap<String, LocalResource>();
-    tezConf.setInt(TezConfiguration.TEZ_AM_APPLICATION_PRIORITY, testpriority);
-    AMConfiguration amConf =
-        new AMConfiguration(tezConf, new HashMap<String, LocalResource>(), credentials);
-    ApplicationSubmissionContext appcontext;
-    appcontext = TezClientUtils.createApplicationSubmissionContext(
-        appId, null, "dagname",
-        amConf, m,
-        credentials, false,
-        new TezApiVersionInfo(), null, null, null);
-    assertEquals(testpriority, appcontext.getPriority().getPriority());
-  }
-
-  @Test(timeout=1000)
-  // when tez config property for app priority not set,
-  // tez should not set app priority and let YARN deal with it.
-  public void testSetApplicationPriority() {
-    TezConfiguration conf = new TezConfiguration(false);
-    AMConfiguration amconfig = new AMConfiguration(conf, null, null);
-    ApplicationSubmissionContext appContext = Records
-        .newRecord(ApplicationSubmissionContext.class);
-    TezClientUtils.setApplicationPriority(appContext, amconfig);
-    assertNull(appContext.getPriority());
-  }
-
   @Test(timeout = 5000)
   public void testSessionTokenInAmClc() throws IOException, YarnException {
 
@@ -264,7 +225,7 @@ public class TestTezClientUtils {
     ApplicationSubmissionContext appSubmissionContext =
         TezClientUtils.createApplicationSubmissionContext(appId, dag, "amName", amConf,
             new HashMap<String, LocalResource>(), credentials, false, new TezApiVersionInfo(),
-            mock(HistoryACLPolicyManager.class), null, null);
+            mock(HistoryACLPolicyManager.class));
 
     ContainerLaunchContext amClc = appSubmissionContext.getAMContainerSpec();
     Map<String, ByteBuffer> amServiceData = amClc.getServiceData();
@@ -297,7 +258,7 @@ public class TestTezClientUtils {
     ApplicationSubmissionContext appSubmissionContext =
         TezClientUtils.createApplicationSubmissionContext(appId, dag, "amName", amConf,
             new HashMap<String, LocalResource>(), credentials, false, new TezApiVersionInfo(),
-            mock(HistoryACLPolicyManager.class), null, null);
+            mock(HistoryACLPolicyManager.class));
 
     List<String> expectedCommands = new LinkedList<String>();
     expectedCommands.add("-Dlog4j.configuratorClass=org.apache.tez.common.TezLog4jConfigurator");
@@ -337,7 +298,7 @@ public class TestTezClientUtils {
     ApplicationSubmissionContext appSubmissionContext =
         TezClientUtils.createApplicationSubmissionContext(appId, dag, "amName", amConf,
             new HashMap<String, LocalResource>(), credentials, false, new TezApiVersionInfo(),
-            mock(HistoryACLPolicyManager.class), null, null);
+            mock(HistoryACLPolicyManager.class));
 
     List<String> expectedCommands = new LinkedList<String>();
     expectedCommands.add("-Dlog4j.configuratorClass=org.apache.tez.common.TezLog4jConfigurator");
@@ -361,9 +322,6 @@ public class TestTezClientUtils {
 
   @Test(timeout = 5000)
   public void testAMCommandOpts() {
-    Path tmpDir = new Path(Environment.PWD.$(),
-        YarnConfiguration.DEFAULT_CONTAINER_TEMP_DIR);
-    String tmpOpts = "-Djava.io.tmpdir=" + tmpDir;
     TezConfiguration tezConf = new TezConfiguration();
     String amCommandOpts = "-Xmx 200m -Dtest.property";
     tezConf.set(TezConfiguration.TEZ_AM_LAUNCH_CMD_OPTS, amCommandOpts);
@@ -371,9 +329,8 @@ public class TestTezClientUtils {
     // Test1: Rely on defaults for cluster-default opts
     String amOptsConstructed =
         TezClientUtils.constructAMLaunchOpts(tezConf, Resource.newInstance(1024, 1));
-    assertEquals(tmpOpts + " "
-        + TezConfiguration.TEZ_AM_LAUNCH_CLUSTER_DEFAULT_CMD_OPTS_DEFAULT + " "
-        + amCommandOpts,
+    assertEquals(
+        TezConfiguration.TEZ_AM_LAUNCH_CLUSTER_DEFAULT_CMD_OPTS_DEFAULT + " " + amCommandOpts,
         amOptsConstructed);
 
     // Test2: Setup cluster-default command opts explicitly
@@ -382,7 +339,7 @@ public class TestTezClientUtils {
     tezConf.set(TezConfiguration.TEZ_AM_LAUNCH_CLUSTER_DEFAULT_CMD_OPTS, clusterDefaultCommandOpts);
     amOptsConstructed =
         TezClientUtils.constructAMLaunchOpts(tezConf, Resource.newInstance(1024, 1));
-    assertEquals(tmpOpts + " " + clusterDefaultCommandOpts + " " + amCommandOpts, amOptsConstructed);
+    assertEquals(clusterDefaultCommandOpts + " " + amCommandOpts, amOptsConstructed);
 
 
     // Test3: Don't setup Xmx explicitly
@@ -393,7 +350,7 @@ public class TestTezClientUtils {
         TezClientUtils.constructAMLaunchOpts(tezConf, Resource.newInstance(1024, 1));
     // It's OK for the Xmx value to show up before cluster default options, since Xmx will not be replaced if it already exists.
     assertEquals(
-        " -Xmx" + ((int) (1024 * factor)) + "m" + " " + tmpOpts + " " + clusterDefaultCommandOpts + " " +
+        " -Xmx" + ((int) (1024 * factor)) + "m" + " " + clusterDefaultCommandOpts + " " +
             amCommandOpts,
         amOptsConstructed);
 
@@ -403,11 +360,11 @@ public class TestTezClientUtils {
     tezConf.set(TezConfiguration.TEZ_AM_LAUNCH_CLUSTER_DEFAULT_CMD_OPTS, clusterDefaultCommandOpts);
     amOptsConstructed =
         TezClientUtils.constructAMLaunchOpts(tezConf, Resource.newInstance(1024, 1));
-    assertEquals(tmpOpts + " " + clusterDefaultCommandOpts + " " + amCommandOpts, amOptsConstructed);
+    assertEquals(clusterDefaultCommandOpts + " " + amCommandOpts, amOptsConstructed);
   }
 
   @Test(timeout = 5000)
-  public void testTaskCommandOpts() throws TezException {
+  public void testTaskCommandOpts() {
     TezConfiguration tezConf = new TezConfiguration();
     String taskCommandOpts = "-Xmx 200m -Dtest.property";
     tezConf.set(TezConfiguration.TEZ_TASK_LAUNCH_CMD_OPTS, taskCommandOpts);
@@ -507,8 +464,7 @@ public class TestTezClientUtils {
     Assert.assertNotNull(javaOpts);
     Assert.assertTrue(javaOpts.contains("-D" + TezConstants.TEZ_ROOT_LOGGER_NAME + "=FOOBAR")
         && javaOpts.contains(TezConstants.TEZ_CONTAINER_LOG4J_PROPERTIES_FILE)
-        &&
-        javaOpts.contains("-Dlog4j.configuratorClass=org.apache.tez.common.TezLog4jConfigurator"));
+        && javaOpts.contains("-Dlog4j.configuratorClass=org.apache.tez.common.TezLog4jConfigurator"));
   }
 
   @Test (timeout = 5000)
@@ -524,7 +480,7 @@ public class TestTezClientUtils {
     expected.put("property1", val1);
     expected.put("property2", expVal2);
 
-    ConfigurationProto confProto = TezClientUtils.createFinalConfProtoForApp(conf, null, null);
+    ConfigurationProto confProto = TezClientUtils.createFinalConfProtoForApp(conf, null);
 
     for (PlanKeyValuePair kvPair : confProto.getConfKeyValuesList()) {
       String v = expected.remove(kvPair.getKey());
@@ -628,7 +584,7 @@ public class TestTezClientUtils {
       srcConf.set(entry.getKey(), entry.getValue());
     }
 
-    ConfigurationProto confProto = TezClientUtils.createFinalConfProtoForApp(srcConf, null, null);
+    ConfigurationProto confProto = TezClientUtils.createFinalConfProtoForApp(srcConf);
 
     for (PlanKeyValuePair kvPair : confProto.getConfKeyValuesList()) {
       String val = confMap.remove(kvPair.getKey());
@@ -684,70 +640,5 @@ public class TestTezClientUtils {
     Assert.assertTrue(resourceNames.contains("f1.txt"));
     Assert.assertTrue(resourceNames.contains("dir2-f.txt"));
   }
-
-  @Test(timeout = 5000)
-  public void testServiceDescriptorSerializationForAM() {
-    Configuration conf = new Configuration(false);
-    ServicePluginsDescriptor servicePluginsDescriptor = ServicePluginsDescriptor.create(true);
-
-    ConfigurationProto confProto = TezClientUtils.createFinalConfProtoForApp(conf, null,
-        servicePluginsDescriptor);
-
-    assertTrue(confProto.hasAmPluginDescriptor());
-    assertTrue(confProto.getAmPluginDescriptor().getUberEnabled());
-  }
-
-  @Test(timeout = 5000)
-  public void testTaskLaunchCmdOptsSetup() throws TezException {
-    Configuration conf = new Configuration(false);
-    String vOpts = "";
-    String opts = TezClientUtils.addDefaultsToTaskLaunchCmdOpts(vOpts, conf);
-
-    Assert.assertEquals(opts,
-        TezConfiguration.TEZ_TASK_LAUNCH_CLUSTER_DEFAULT_CMD_OPTS_DEFAULT + " "
-            + TezConfiguration.TEZ_TASK_LAUNCH_CMD_OPTS_DEFAULT + " " + vOpts);
-
-    vOpts = "foo";
-    opts = TezClientUtils.addDefaultsToTaskLaunchCmdOpts(vOpts, conf);
-
-    Assert.assertEquals(opts,
-        TezConfiguration.TEZ_TASK_LAUNCH_CLUSTER_DEFAULT_CMD_OPTS_DEFAULT + "  " + vOpts);
-
-    String taskOpts = "taskOpts";
-    conf.set(TezConfiguration.TEZ_TASK_LAUNCH_CMD_OPTS, taskOpts);
-    opts = TezClientUtils.addDefaultsToTaskLaunchCmdOpts(vOpts, conf);
-
-    Assert.assertEquals(opts,
-        TezConfiguration.TEZ_TASK_LAUNCH_CLUSTER_DEFAULT_CMD_OPTS_DEFAULT
-            + " " + taskOpts + " " + vOpts);
-
-  }
-
-  @Test(timeout = 5000)
-  public void testClusterTaskLaunchCmdOptsSetup() throws TezException {
-    Configuration conf = new Configuration(false);
-    String adminOpts = "adminOpts";
-    conf.set(TezConfiguration.TEZ_TASK_LAUNCH_CLUSTER_DEFAULT_CMD_OPTS, adminOpts);
-
-    String vOpts = "";
-    String opts = TezClientUtils.addDefaultsToTaskLaunchCmdOpts(vOpts, conf);
-
-    Assert.assertEquals(opts,
-        adminOpts + " "
-            + TezConfiguration.TEZ_TASK_LAUNCH_CMD_OPTS_DEFAULT + " " + vOpts);
-
-    vOpts = "foo";
-    opts = TezClientUtils.addDefaultsToTaskLaunchCmdOpts(vOpts, conf);
-
-    Assert.assertEquals(opts, adminOpts + "  " + vOpts);
-
-    String taskOpts = "taskOpts";
-    conf.set(TezConfiguration.TEZ_TASK_LAUNCH_CMD_OPTS, taskOpts);
-    opts = TezClientUtils.addDefaultsToTaskLaunchCmdOpts(vOpts, conf);
-
-    Assert.assertEquals(opts, adminOpts + " " + taskOpts + " " + vOpts);
-
-  }
-
 
 }

@@ -38,16 +38,12 @@ public class AMSchedulerEventTALaunchRequest extends AMSchedulerEvent {
   private final TaskSpec remoteTaskSpec;
   private final TaskAttempt taskAttempt;
 
-  private final int launcherId;
-  private final int taskCommId;
-
   public AMSchedulerEventTALaunchRequest(TezTaskAttemptID attemptId,
       Resource capability,
       TaskSpec remoteTaskSpec, TaskAttempt ta,
       TaskLocationHint locationHint, int priority,
-      ContainerContext containerContext,
-      int schedulerId, int launcherId, int taskCommId) {
-    super(AMSchedulerEventType.S_TA_LAUNCH_REQUEST, schedulerId);
+      ContainerContext containerContext) {
+    super(AMSchedulerEventType.S_TA_LAUNCH_REQUEST);
     this.attemptId = attemptId;
     this.capability = capability;
     this.remoteTaskSpec = remoteTaskSpec;
@@ -55,8 +51,6 @@ public class AMSchedulerEventTALaunchRequest extends AMSchedulerEvent {
     this.locationHint = locationHint;
     this.priority = priority;
     this.containerContext = containerContext;
-    this.launcherId = launcherId;
-    this.taskCommId = taskCommId;
   }
 
   public TezTaskAttemptID getAttemptID() {
@@ -85,14 +79,6 @@ public class AMSchedulerEventTALaunchRequest extends AMSchedulerEvent {
 
   public ContainerContext getContainerContext() {
     return this.containerContext;
-  }
-
-  public int getLauncherId() {
-    return launcherId;
-  }
-
-  public int getTaskCommId() {
-    return taskCommId;
   }
 
   // Parameter replacement: @taskid@ will not be usable

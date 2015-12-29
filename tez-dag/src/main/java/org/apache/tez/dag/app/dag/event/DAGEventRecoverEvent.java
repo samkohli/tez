@@ -18,34 +18,37 @@
 
 package org.apache.tez.dag.app.dag.event;
 
-import org.apache.tez.dag.app.RecoveryParser.DAGRecoveryData;
+import java.net.URL;
+import java.util.List;
+
 import org.apache.tez.dag.app.dag.DAGState;
 import org.apache.tez.dag.records.TezDAGID;
 
 public class DAGEventRecoverEvent extends DAGEvent {
 
   private final DAGState desiredState;
-  private final DAGRecoveryData recoveredDagData;
+  private final List<URL> additionalUrlsForClasspath;
 
-  public DAGEventRecoverEvent(TezDAGID dagId, DAGState desiredState, DAGRecoveryData recoveredDagData) {
+  public DAGEventRecoverEvent(TezDAGID dagId, DAGState desiredState,
+      List<URL> additionalUrlsForClasspath) {
     super(dagId, DAGEventType.DAG_RECOVER);
     this.desiredState = desiredState;
-    this.recoveredDagData = recoveredDagData;
+    this.additionalUrlsForClasspath = additionalUrlsForClasspath;
   }
   
-  public DAGEventRecoverEvent(TezDAGID dagId, DAGRecoveryData recoveredDagData) {
-    this(dagId, null, recoveredDagData);
+  public DAGEventRecoverEvent(TezDAGID dagId, List<URL> additionalUrlsForClasspath) {
+    this(dagId, null, additionalUrlsForClasspath);
   }
   
   public DAGState getDesiredState() {
     return desiredState;
   }
   
-  public boolean hasDesiredState() {
-    return this.desiredState != null;
+  public List<URL> getAdditionalUrlsForClasspath() {
+    return this.additionalUrlsForClasspath;
   }
 
-  public DAGRecoveryData getRecoveredDagData() {
-    return recoveredDagData;
+  public boolean hasDesiredState() {
+    return this.desiredState != null;
   }
 }

@@ -146,6 +146,6 @@ public class InputAttemptIdentifier {
   public String toString() {
     return "InputAttemptIdentifier [inputIdentifier=" + inputIdentifier
         + ", attemptNumber=" + attemptNumber + ", pathComponent="
-        + pathComponent + ", spillType=" + fetchTypeInfo.ordinal() + ", spillId=" + spillEventId  +"]";
+        + pathComponent + ", fetchTypeInfo=" + fetchTypeInfo + ", spillEventId=" + spillEventId  +"]";
   }
 }

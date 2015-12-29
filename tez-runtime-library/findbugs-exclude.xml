@@ -93,6 +93,12 @@
   </Match>
 
   <Match>
+    <Class name="org.apache.tez.runtime.library.common.sort.impl.dflt.DefaultSorter"/>
+    <Field name="totalKeys"/>
+    <Bug pattern="IS2_INCONSISTENT_SYNC"/>
+  </Match>
+
+  <Match>
     <Class name="~org\.apache\.tez\.runtime\.library\.shuffle\.impl\.ShuffleUserPayloads\$.*Proto"/>
     <Field name="PARSER"/>
     <Bug pattern="MS_SHOULD_BE_FINAL"/>
@@ -120,15 +126,6 @@
     <Class name="org.apache.tez.runtime.library.common.shuffle.ShuffleUtils"/>
     <Method name="getHttpConnectionParams" params="org.apache.hadoop.conf.Configuration" return="org.apache.tez.http.HttpConnectionParams"/>
     <Bug pattern="DC_PARTIALLY_CONSTRUCTED"/>
-  </Match>
-
-  <Match>
-    <Bug pattern="EI_EXPOSE_REP"/>
-    <Or>
-      <Class name="org.apache.tez.runtime.library.common.sort.impl.ExteralSorter" />
-      <Method name="getPartitionStats"/>
-      <Field name="partitionStats"/>
-    </Or>
   </Match>
 
 </FindBugsFilter>

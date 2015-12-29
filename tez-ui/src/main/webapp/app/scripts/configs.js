@@ -37,12 +37,6 @@ App.setConfigs({
      * Ensures that some of the UI features work with old versions of Tez
      */
     compatibilityMode: false,
-
-    /*
-     * Default time zone for UI display. Set to undefined for local timezone
-     * For configuration see http://momentjs.com/timezone/docs/
-     */
-    //timezone: "UTC",
   },
 
   /*

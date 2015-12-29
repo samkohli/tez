@@ -86,12 +86,6 @@
   </Match>
 
   <Match>
-    <Class name="org.apache.tez.client.TezClient"/>
-    <Method name="stop"/>
-    <Bug pattern="SWL_SLEEP_WITH_LOCK_HELD"/>
-  </Match>
-
-  <Match>
     <Class name="org.apache.tez.dag.api.EdgeManagerPluginOnDemand$EventRouteMetadata"/>
     <Method name="getSourceIndices"/>
     <Bug pattern="EI_EXPOSE_REP"/>
@@ -101,24 +95,6 @@
     <Class name="org.apache.tez.dag.api.EdgeManagerPluginOnDemand$EventRouteMetadata"/>
     <Method name="getTargetIndices"/>
     <Bug pattern="EI_EXPOSE_REP"/>
-  </Match>
-
-  <Match>
-    <Class name="org.apache.tez.serviceplugins.api.ServicePluginsDescriptor" />
-    <Method name="getTaskSchedulerDescriptors" />
-    <Bug pattern="EI_EXPOSE_REP" />
-  </Match>
-
-  <Match>
-    <Class name="org.apache.tez.serviceplugins.api.ServicePluginsDescriptor" />
-    <Method name="getContainerLauncherDescriptors" />
-    <Bug pattern="EI_EXPOSE_REP" />
-  </Match>
-
-  <Match>
-    <Class name="org.apache.tez.serviceplugins.api.ServicePluginsDescriptor" />
-    <Method name="getTaskCommunicatorDescriptors" />
-    <Bug pattern="EI_EXPOSE_REP" />
   </Match>
 
 </FindBugsFilter>

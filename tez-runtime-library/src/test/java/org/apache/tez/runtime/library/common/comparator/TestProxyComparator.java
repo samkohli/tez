@@ -56,7 +56,6 @@ public class TestProxyComparator {
   public void cleanup() throws Exception {
   }
 
-  @SuppressWarnings("unchecked")
   @Test(timeout = 5000)
   public void testProxyComparator() {
     final ProxyComparator<BytesWritable> comparator = new TezBytesComparator();

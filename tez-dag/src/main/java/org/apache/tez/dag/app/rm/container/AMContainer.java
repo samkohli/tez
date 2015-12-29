@@ -32,8 +32,5 @@ public interface AMContainer extends EventHandler<AMContainerEvent>{
   public Container getContainer();
   public List<TezTaskAttemptID> getAllTaskAttempts();
   public TezTaskAttemptID getCurrentTaskAttempt();
-  public long getCurrentTaskAttemptAllocationTime();
-  public int getTaskSchedulerIdentifier();
-  public int getContainerLauncherIdentifier();
-  public int getTaskCommunicatorIdentifier();
+  
 }

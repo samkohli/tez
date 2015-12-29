@@ -27,25 +27,19 @@ import java.net.URL;
 import java.nio.ByteBuffer;
 import java.text.DecimalFormat;
 import java.util.BitSet;
-import java.util.Collection;
 import java.util.List;
 
-import javax.annotation.Nullable;
 import javax.crypto.SecretKey;
 
 import com.google.common.base.Preconditions;
 import com.google.protobuf.ByteString;
-
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.io.DataOutputBuffer;
 import org.apache.tez.http.BaseHttpConnection;
 import org.apache.tez.http.HttpConnection;
 import org.apache.tez.http.HttpConnectionParams;
 import org.apache.tez.http.SSLFactory;
 import org.apache.tez.http.async.netty.AsyncHttpConnection;
 import org.apache.tez.runtime.api.events.DataMovementEvent;
-import org.apache.tez.runtime.library.utils.DATA_RANGE_IN_MB;
-import org.roaringbitmap.RoaringBitmap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.hadoop.io.DataInputByteBuffer;
@@ -117,16 +111,12 @@ public class ShuffleUtils {
       Logger LOG, String identifier) throws IOException {
     try {
       IFile.Reader.readToMemory(shuffleData, input, compressedLength, codec,
-          ifileReadAhead, ifileReadAheadLength);
+        ifileReadAhead, ifileReadAheadLength);
       // metrics.inputBytes(shuffleData.length);
-      if (LOG.isDebugEnabled()) {
-        LOG.debug("Read " + shuffleData.length + " bytes from input for "
-            + identifier);
-      }
+      LOG.info("Read " + shuffleData.length + " bytes from input for "
+          + identifier);
     } catch (IOException ioe) {
       // Close the streams
-      LOG.info("Failed to read data to memory for " + identifier + ". len=" + compressedLength +
-          ", decomp=" + decompressedLength + ". ExceptionMessage=" + ioe.getMessage());
       ioCleanup(input);
       // Re-throw
       throw ioe;
@@ -134,7 +124,7 @@ public class ShuffleUtils {
   }
   
   public static void shuffleToDisk(OutputStream output, String hostIdentifier,
-      InputStream input, long compressedLength, long decompressedLength, Logger LOG, String identifier)
+      InputStream input, long compressedLength, Logger LOG, String identifier)
       throws IOException {
     // Copy data to local-disk
     long bytesLeft = compressedLength;
@@ -152,16 +142,12 @@ public class ShuffleUtils {
         // metrics.inputBytes(n);
       }
 
-      if (LOG.isDebugEnabled()) {
-        LOG.debug("Read " + (compressedLength - bytesLeft)
-            + " bytes from input for " + identifier);
-      }
+      LOG.info("Read " + (compressedLength - bytesLeft)
+          + " bytes from input for " + identifier);
 
       output.close();
     } catch (IOException ioe) {
       // Close the streams
-      LOG.info("Failed to read data to disk for " + identifier + ". len=" + compressedLength +
-          ", decomp=" + decompressedLength + ". ExceptionMessage=" + ioe.getMessage());
       ioCleanup(input, output);
       // Re-throw
       throw ioe;
@@ -192,29 +178,27 @@ public class ShuffleUtils {
 
   // TODO NEWTEZ handle ssl shuffle
   public static StringBuilder constructBaseURIForShuffleHandler(String host,
-      int port, int partition, String appId, int dagIdentifier, boolean sslShuffle) {
+      int port, int partition, String appId, boolean sslShuffle) {
     return constructBaseURIForShuffleHandler(host + ":" + String.valueOf(port),
-      partition, appId, dagIdentifier, sslShuffle);
+      partition, appId, sslShuffle);
   }
   
   public static StringBuilder constructBaseURIForShuffleHandler(String hostIdentifier,
-      int partition, String appId, int dagIdentifier, boolean sslShuffle) {
+      int partition, String appId, boolean sslShuffle) {
     final String http_protocol = (sslShuffle) ? "https://" : "http://";
     StringBuilder sb = new StringBuilder(http_protocol);
     sb.append(hostIdentifier);
     sb.append("/");
     sb.append("mapOutput?job=");
     sb.append(appId.replace("application", "job"));
-    sb.append("&dag=");
-    sb.append(String.valueOf(dagIdentifier));
     sb.append("&reduce=");
     sb.append(String.valueOf(partition));
     sb.append("&map=");
     return sb;
   }
 
-  public static URL constructInputURL(String baseURI,
-      Collection<InputAttemptIdentifier> inputs, boolean keepAlive) throws MalformedURLException {
+  public static URL constructInputURL(String baseURI, 
+      List<InputAttemptIdentifier> inputs, boolean keepAlive) throws MalformedURLException {
     StringBuilder url = new StringBuilder(baseURI);
     boolean first = true;
     for (InputAttemptIdentifier input : inputs) {
@@ -388,16 +372,14 @@ public class ShuffleUtils {
    * @param spillRecord
    * @param numPhysicalOutputs
    * @param pathComponent
-   * @param partitionStats
    * @throws IOException
    */
   public static void generateEventOnSpill(List<Event> eventList, boolean finalMergeEnabled,
       boolean isLastEvent, OutputContext context, int spillId, TezSpillRecord spillRecord,
-      int numPhysicalOutputs, boolean sendEmptyPartitionDetails, String pathComponent,
-      @Nullable long[] partitionStats) throws IOException {
+      int numPhysicalOutputs, boolean sendEmptyPartitionDetails, String pathComponent)
+      throws IOException {
     Preconditions.checkArgument(eventList != null, "EventList can't be null");
 
-    context.notifyProgress();
     if (finalMergeEnabled) {
       Preconditions.checkArgument(isLastEvent, "Can not send multiple events when final merge is "
           + "enabled");
@@ -423,16 +405,6 @@ public class ShuffleUtils {
       // up adding up to final outputsize.  This is needed for auto-reduce parallelism to work
       // properly.
       vmBuilder.setOutputSize(outputSize);
-
-      //set partition stats
-      if (partitionStats != null && partitionStats.length > 0) {
-        RoaringBitmap stats = getPartitionStatsForPhysicalOutput(partitionStats);
-        DataOutputBuffer dout = new DataOutputBuffer();
-        stats.serialize(dout);
-        ByteString partitionStatsBytes = TezCommonUtils.compressByteArrayToByteString(dout.getData());
-        vmBuilder.setPartitionStats(partitionStatsBytes);
-      }
-
       VertexManagerEvent vmEvent = VertexManagerEvent.create(
           context.getDestinationVertexName(), vmBuilder.build().toByteString().asReadOnlyByteBuffer());
       eventList.add(vmEvent);
@@ -444,24 +416,6 @@ public class ShuffleUtils {
     eventList.add(csdme);
   }
 
-  /**
-   * Data size for the destinations
-   *
-   * @param sizes for physical outputs
-   */
-  public static RoaringBitmap getPartitionStatsForPhysicalOutput(long[] sizes) {
-    RoaringBitmap partitionStats = new RoaringBitmap();
-    if (sizes == null || sizes.length == 0) {
-      return partitionStats;
-    }
-    final int RANGE_LEN = DATA_RANGE_IN_MB.values().length;
-    for (int i = 0; i < sizes.length; i++) {
-      int bucket = DATA_RANGE_IN_MB.getRange(sizes[i]).ordinal();
-      int index = i * (RANGE_LEN);
-      partitionStats.add(index + bucket);
-    }
-    return partitionStats;
-  }
 
 
   /**
@@ -488,26 +442,10 @@ public class ShuffleUtils {
     }
     log.info(
         "Completed fetch for attempt: "
-            + toShortString(srcAttemptIdentifier)
-            +" to " + outputType +
-            ", csize=" + bytesCompressed + ", dsize=" + bytesDecompressed +
+            + srcAttemptIdentifier + " to " + outputType +
+            ", CompressedSize=" + bytesCompressed + ", DecompressedSize=" + bytesDecompressed +
             ", EndTime=" + System.currentTimeMillis() + ", TimeTaken=" + millis + ", Rate=" +
             MBPS_FORMAT.get().format(rate) + " MB/s");
-  }
-
-  private static String toShortString(InputAttemptIdentifier inputAttemptIdentifier) {
-    StringBuilder sb = new StringBuilder();
-    sb.append("{");
-    sb.append(inputAttemptIdentifier.getInputIdentifier().getInputIndex());
-    sb.append(", ").append(inputAttemptIdentifier.getAttemptNumber());
-    sb.append(", ").append(inputAttemptIdentifier.getPathComponent());
-    if (inputAttemptIdentifier.getFetchTypeInfo()
-        != InputAttemptIdentifier.SPILL_INFO.FINAL_MERGE_ENABLED) {
-      sb.append(", ").append(inputAttemptIdentifier.getFetchTypeInfo().ordinal());
-      sb.append(", ").append(inputAttemptIdentifier.getSpillEventId());
-    }
-    sb.append("}");
-    return sb.toString();
   }
 
   /**

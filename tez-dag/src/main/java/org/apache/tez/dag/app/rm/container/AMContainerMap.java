@@ -22,7 +22,6 @@ import java.util.Collection;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.tez.dag.app.dag.DAG;
-import org.apache.tez.common.ContainerSignatureMatcher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.hadoop.service.AbstractService;
@@ -31,19 +30,19 @@ import org.apache.hadoop.yarn.api.records.ContainerId;
 import org.apache.hadoop.yarn.event.EventHandler;
 import org.apache.tez.dag.app.AppContext;
 import org.apache.tez.dag.app.ContainerHeartbeatHandler;
-import org.apache.tez.dag.app.TaskCommunicatorManagerInterface;
+import org.apache.tez.dag.app.TaskAttemptListener;
 
 public class AMContainerMap extends AbstractService implements EventHandler<AMContainerEvent> {
 
   private static final Logger LOG = LoggerFactory.getLogger(AMContainerMap.class);
 
   private final ContainerHeartbeatHandler chh;
-  private final TaskCommunicatorManagerInterface tal;
+  private final TaskAttemptListener tal;
   private final AppContext context;
   private final ContainerSignatureMatcher containerSignatureMatcher;
   private final ConcurrentHashMap<ContainerId, AMContainer> containerMap;
 
-  public AMContainerMap(ContainerHeartbeatHandler chh, TaskCommunicatorManagerInterface tal,
+  public AMContainerMap(ContainerHeartbeatHandler chh, TaskAttemptListener tal,
       ContainerSignatureMatcher containerSignatureMatcher, AppContext context) {
     super("AMContainerMaps");
     this.chh = chh;
@@ -63,9 +62,9 @@ public class AMContainerMap extends AbstractService implements EventHandler<AMCo
     }
   }
 
-  public boolean addContainerIfNew(Container container, int schedulerId, int launcherId, int taskCommId) {
+  public boolean addContainerIfNew(Container container) {
     AMContainer amc = new AMContainerImpl(container, chh, tal,
-      containerSignatureMatcher, context, schedulerId, launcherId, taskCommId);
+      containerSignatureMatcher, context);
     return (containerMap.putIfAbsent(container.getId(), amc) == null);
   }
 

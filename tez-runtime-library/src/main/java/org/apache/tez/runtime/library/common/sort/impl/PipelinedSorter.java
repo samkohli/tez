@@ -1,4 +1,4 @@
-  /**
+/**
 * Licensed to the Apache Software Foundation (ASF) under one
 * or more contributor license agreements.  See the NOTICE file
 * distributed with this work for additional information
@@ -25,7 +25,9 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.IntBuffer;
 import java.util.ArrayList;
+import java.util.LinkedList;
 import java.util.List;
+import java.util.ListIterator;
 import java.util.PriorityQueue;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -36,7 +38,6 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Stopwatch;
 import com.google.common.collect.Lists;
-
 import org.apache.tez.runtime.library.api.IOInterruptedException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -58,7 +59,6 @@ import org.apache.tez.runtime.library.common.ConfigUtils;
 import org.apache.tez.runtime.library.common.shuffle.ShuffleUtils;
 import org.apache.tez.runtime.library.common.sort.impl.IFile.Writer;
 import org.apache.tez.runtime.library.common.sort.impl.TezMerger.Segment;
-import org.apache.tez.runtime.library.utils.LocalProgress;
 
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 
@@ -87,12 +87,19 @@ public class PipelinedSorter extends ExternalSorter {
   private final ProxyComparator hasher;
   // SortSpans  
   private SortSpan span;
+  //Maintain a bunch of ByteBuffers (each of them can hold approximately 2 GB data)
+  @VisibleForTesting
+  protected final LinkedList<ByteBuffer> bufferList = new LinkedList<ByteBuffer>();
+  private ListIterator<ByteBuffer> listIterator;
 
   //total memory capacity allocated to sorter
   private final long capacity;
 
   //track buffer overflow recursively in all buffers
   private int bufferOverflowRecursion;
+
+  private final int blockSize;
+
 
   // Merger
   private final SpanMerger merger; 
@@ -103,46 +110,17 @@ public class PipelinedSorter extends ExternalSorter {
 
   private final boolean pipelinedShuffle;
 
-  private long currentAllocatableMemory;
-  //Maintain a list of ByteBuffers
-  @VisibleForTesting
-  final List<ByteBuffer> buffers;
-  final int maxNumberOfBlocks;
-  private int bufferIndex = -1;
-  private final int MIN_BLOCK_SIZE;
-  private final boolean lazyAllocateMem;
-
   // TODO Set additional countesr - total bytes written, spills etc.
 
   public PipelinedSorter(OutputContext outputContext, Configuration conf, int numOutputs,
       long initialMemoryAvailable) throws IOException {
+    this(outputContext,conf,numOutputs, initialMemoryAvailable, 0);
+  }
+
+  PipelinedSorter(OutputContext outputContext, Configuration conf, int numOutputs,
+      long initialMemoryAvailable, int blkSize) throws IOException {
     super(outputContext, conf, numOutputs, initialMemoryAvailable);
-
-    lazyAllocateMem = this.conf.getBoolean(TezRuntimeConfiguration
-        .TEZ_RUNTIME_PIPELINED_SORTER_LAZY_ALLOCATE_MEMORY, TezRuntimeConfiguration
-        .TEZ_RUNTIME_PIPELINED_SORTER_LAZY_ALLOCATE_MEMORY_DEFAULT);
-
-    if (lazyAllocateMem) {
-      /**
-       * When lazy-allocation is enabled, framework takes care of auto
-       * allocating memory on need basis. Desirable block size is set to 256MB
-       */
-      MIN_BLOCK_SIZE = 256 << 20; //256 MB
-    } else {
-      int minBlockSize = conf.getInt(TezRuntimeConfiguration
-              .TEZ_RUNTIME_PIPELINED_SORTER_MIN_BLOCK_SIZE_IN_MB,
-          TezRuntimeConfiguration
-              .TEZ_RUNTIME_PIPELINED_SORTER_MIN_BLOCK_SIZE_IN_MB_DEFAULT);
-      Preconditions.checkArgument(
-          (minBlockSize > 0 && minBlockSize < 2047),
-          TezRuntimeConfiguration
-              .TEZ_RUNTIME_PIPELINED_SORTER_MIN_BLOCK_SIZE_IN_MB
-              + "=" + minBlockSize + " should be a positive value between 0 and 2047");
-      MIN_BLOCK_SIZE = minBlockSize << 20;
-    }
-
-    StringBuilder initialSetupLogLine = new StringBuilder("Setting up PipelinedSorter for ")
-        .append(outputContext.getDestinationVertexName()).append(": ");
+    
     partitionBits = bitcount(partitions)+1;
 
     boolean confPipelinedShuffle = this.conf.getBoolean(TezRuntimeConfiguration
@@ -155,58 +133,33 @@ public class PipelinedSorter extends ExternalSorter {
     final long sortmb = this.availableMemoryMb;
 
     // buffers and accounting
-    long maxMemLimit = sortmb << 20;
+    long maxMemUsage = sortmb << 20;
 
-    initialSetupLogLine.append(", UsingHashComparator=");
-    // k/v serialization
-    if(comparator instanceof ProxyComparator) {
-      hasher = (ProxyComparator)comparator;
-      initialSetupLogLine.append(true);
-    } else {
-      hasher = null;
-      initialSetupLogLine.append(false);
-    }
+    this.blockSize = computeBlockSize(blkSize, maxMemUsage);
 
-    LOG.info(initialSetupLogLine.toString());
-
+    long usage = sortmb << 20;
+    //Divide total memory into different blocks.
+    int numberOfBlocks = Math.max(1, (int) Math.ceil(1.0 * usage / blockSize));
+    LOG.info("Number of Blocks : " + numberOfBlocks
+        + ", maxMemUsage=" + maxMemUsage + ", BLOCK_SIZE=" + blockSize + ", finalMergeEnabled="
+        + isFinalMergeEnabled() + ", pipelinedShuffle=" + pipelinedShuffle + ", "
+        + "sendEmptyPartitionDetails=" + sendEmptyPartitionDetails);
     long totalCapacityWithoutMeta = 0;
-    long availableMem = maxMemLimit;
-    int numBlocks = 0;
-    while(availableMem > 0) {
-      long size = Math.min(availableMem, computeBlockSize(availableMem, maxMemLimit));
+    for (int i = 0; i < numberOfBlocks; i++) {
+      Preconditions.checkArgument(usage > 0, "usage can't be less than zero " + usage);
+      long size = Math.min(usage, blockSize);
       int sizeWithoutMeta = (int) ((size) - (size % METASIZE));
+      bufferList.add(ByteBuffer.allocate(sizeWithoutMeta));
       totalCapacityWithoutMeta += sizeWithoutMeta;
-      availableMem -= size;
-      numBlocks++;
+      usage -= size;
     }
-    currentAllocatableMemory = maxMemLimit;
-    maxNumberOfBlocks = numBlocks;
     capacity = totalCapacityWithoutMeta;
+    listIterator = bufferList.listIterator();
 
-    buffers = Lists.newArrayListWithCapacity(maxNumberOfBlocks);
-    allocateSpace(); //Allocate the first block
-    if (!lazyAllocateMem) {
-      LOG.info("Pre allocating rest of memory buffers upfront");
-      while(allocateSpace() != null);
-    }
 
-    initialSetupLogLine.append("#blocks=").append(maxNumberOfBlocks);
-    initialSetupLogLine.append(", maxMemUsage=").append(maxMemLimit);
-    initialSetupLogLine.append(", lazyAllocateMem=").append(
-        lazyAllocateMem);
-    initialSetupLogLine.append(", minBlockSize=").append(MIN_BLOCK_SIZE);
-    initialSetupLogLine.append(", initial BLOCK_SIZE=").append(buffers.get(0).capacity());
-    initialSetupLogLine.append(", finalMergeEnabled=").append(isFinalMergeEnabled());
-    initialSetupLogLine.append(", pipelinedShuffle=").append(pipelinedShuffle);
-    initialSetupLogLine.append(", sendEmptyPartitions=").append(sendEmptyPartitionDetails);
-    initialSetupLogLine.append(", ").append(TezRuntimeConfiguration.TEZ_RUNTIME_IO_SORT_MB).append(
-        "=").append(
-        sortmb);
-
-    Preconditions.checkState(buffers.size() > 0, "Atleast one buffer needs to be present");
-    LOG.info(initialSetupLogLine.toString());
-
-    span = new SortSpan(buffers.get(bufferIndex), 1024 * 1024, 16, this.comparator);
+    LOG.info(TezRuntimeConfiguration.TEZ_RUNTIME_IO_SORT_MB + " = " + sortmb);
+    Preconditions.checkArgument(listIterator.hasNext(), "Buffer list seems to be empty " + bufferList.size());
+    span = new SortSpan(listIterator.next(), 1024*1024, 16, this.comparator);
     merger = new SpanMerger(); // SpanIterators are comparable
     final int sortThreads = 
             this.conf.getInt(
@@ -214,77 +167,34 @@ public class PipelinedSorter extends ExternalSorter {
                 TezRuntimeConfiguration.TEZ_RUNTIME_PIPELINED_SORTER_SORT_THREADS_DEFAULT);
     sortmaster = Executors.newFixedThreadPool(sortThreads,
         new ThreadFactoryBuilder().setDaemon(true)
-        .setNameFormat("Sorter {" + TezUtilsInternal
-            .cleanVertexName(outputContext.getDestinationVertexName()) + "} #%d")
+        .setNameFormat("Sorter [" + TezUtilsInternal
+            .cleanVertexName(outputContext.getDestinationVertexName()) + "] #%d")
         .build());
 
-
+    // k/v serialization    
+    if(comparator instanceof ProxyComparator) {
+      hasher = (ProxyComparator)comparator;
+      LOG.info("Using the HashComparator");
+    } else {
+      hasher = null;
+    }    
     valSerializer.open(span.out);
     keySerializer.open(span.out);
     minSpillsForCombine = this.conf.getInt(TezRuntimeConfiguration.TEZ_RUNTIME_COMBINE_MIN_SPILLS, 3);
   }
 
-  ByteBuffer allocateSpace() {
-    if (currentAllocatableMemory <= 0) {
-      //No space available.
-      return null;
-    }
-
-    int size = computeBlockSize(currentAllocatableMemory, availableMemoryMb << 20);
-    currentAllocatableMemory -= size;
-    int sizeWithoutMeta = (size) - (size % METASIZE);
-    ByteBuffer space = ByteBuffer.allocate(sizeWithoutMeta);
-
-    buffers.add(space);
-    bufferIndex++;
-
-    Preconditions.checkState(buffers.size() <= maxNumberOfBlocks,
-        "Number of blocks " + buffers.size()
-            + " is exceeding  " + maxNumberOfBlocks);
-
-    LOG.info("Newly allocated block size=" + size
-        + ", index=" + bufferIndex
-        + ", Number of buffers=" + buffers.size()
-        + ", currentAllocatableMemory=" + currentAllocatableMemory
-        + ", currentBufferSize=" + space.capacity()
-        + ", total=" + (availableMemoryMb << 20));
-    return space;
-  }
-
-
   @VisibleForTesting
-  int computeBlockSize(long availableMem, long maxAllocatedMemory) {
-    int maxBlockSize = 0;
-    /**
-     * When lazy-allocation is enabled, framework takes care of auto allocating
-     * memory on need basis. In such cases, first buffer starts with 32 MB.
-     */
-    if (lazyAllocateMem) {
-      if (buffers == null || buffers.isEmpty()) {
-        return 32 << 20; //32 MB
+  static int computeBlockSize(int blkSize, long maxMemUsage) {
+    if (blkSize == 0) {
+      return (int) Math.min(maxMemUsage, Integer.MAX_VALUE);
+    } else {
+      Preconditions.checkArgument(blkSize > 0, "blkSize should be between 1 and Integer.MAX_VALUE");
+      if (blkSize >= maxMemUsage) {
+        return (maxMemUsage > Integer.MAX_VALUE) ? Integer.MAX_VALUE : (int) maxMemUsage;
+      } else {
+        return blkSize;
       }
     }
-
-    //Honor MIN_BLOCK_SIZE
-    maxBlockSize = Math.max(MIN_BLOCK_SIZE, maxBlockSize);
-
-    if (availableMem < maxBlockSize) {
-      maxBlockSize = (int) availableMem;
-    }
-
-    int maxMem = (maxAllocatedMemory > Integer.MAX_VALUE) ? Integer.MAX_VALUE : (int) maxAllocatedMemory;
-    if (maxBlockSize > maxMem) {
-      maxBlockSize = maxMem;
-    }
-
-    availableMem -= maxBlockSize;
-    if (availableMem < MIN_BLOCK_SIZE) {
-      if ((maxBlockSize + availableMem) < Integer.MAX_VALUE) {
-        //Merge remaining with last block
-        maxBlockSize += availableMem;
-      }
-    }
-    return maxBlockSize;
   }
 
   private int bitcount(int n) {
@@ -300,21 +210,24 @@ public class PipelinedSorter extends ExternalSorter {
     SortSpan newSpan = span.next();
 
     if(newSpan == null) {
-      //avoid sort/spill of empty span
       Stopwatch stopWatch = new Stopwatch();
       stopWatch.start();
       // sort in the same thread, do not wait for the thread pool
       merger.add(span.sort(sorter));
-      boolean ret = spill(true);
+      spill();
       stopWatch.stop();
-      if (LOG.isDebugEnabled()) {
-        LOG.debug(outputContext.getDestinationVertexName() + ": Time taken for spill " + (stopWatch.elapsedMillis()) + " ms");
+      LOG.info("Time taken for spill " + (stopWatch.elapsedMillis()) + " ms");
+      if (pipelinedShuffle) {
+        List<Event> events = Lists.newLinkedList();
+        String pathComponent = (outputContext.getUniqueIdentifier() + "_" + (numSpills-1));
+        ShuffleUtils.generateEventOnSpill(events, isFinalMergeEnabled(), false, outputContext,
+            (numSpills - 1), indexCacheList.get(numSpills - 1), partitions, sendEmptyPartitionDetails,
+            pathComponent);
+        outputContext.sendEvents(events);
+        LOG.info("Adding spill event for spill (final update=false), spillId=" + (numSpills - 1));
       }
-      if (pipelinedShuffle && ret) {
-        sendPipelinedShuffleEvents();
-      }
-      //safe to reset bufferIndex to 0;
-      bufferIndex = 0;
+      //safe to reset the iterator
+      listIterator = bufferList.listIterator();
       int items = 1024*1024;
       int perItem = 16;
       if(span.length() != 0) {
@@ -326,9 +239,8 @@ public class PipelinedSorter extends ExternalSorter {
             items = 1024*1024;
         }
       }
-      Preconditions.checkArgument(buffers.get(bufferIndex) != null, "block should not be empty");
-      //TODO: fix per item being passed.
-      span = new SortSpan((ByteBuffer)buffers.get(bufferIndex).clear(), (1024*1024),
+      Preconditions.checkArgument(listIterator.hasNext(), "block iterator should not be empty");
+      span = new SortSpan((ByteBuffer)listIterator.next().clear(), (1024*1024),
           perItem, ConfigUtils.getIntermediateOutputKeyComparator(this.conf));
     } else {
       // queue up the sort
@@ -339,18 +251,6 @@ public class PipelinedSorter extends ExternalSorter {
     }
     valSerializer.open(span.out);
     keySerializer.open(span.out);
-  }
-
-  // if pipelined shuffle is enabled, this method is called to send events for every spill
-  private void sendPipelinedShuffleEvents() throws IOException{
-    List<Event> events = Lists.newLinkedList();
-    String pathComponent = (outputContext.getUniqueIdentifier() + "_" + (numSpills-1));
-    ShuffleUtils.generateEventOnSpill(events, isFinalMergeEnabled(), false, outputContext,
-        (numSpills - 1), indexCacheList.get(numSpills - 1), partitions, sendEmptyPartitionDetails,
-        pathComponent, partitionStats);
-    outputContext.sendEvents(events);
-    LOG.info(outputContext.getDestinationVertexName() +
-        ": Added spill event for spill (final update=false), spillId=" + (numSpills - 1));
   }
 
   @Override
@@ -381,18 +281,13 @@ public class PipelinedSorter extends ExternalSorter {
       throw new IOException("Illegal partition for " + key + " (" +
           partition + ")");
     }
-    // TBD:FIX in TEZ-2574
-    if (span.kvmeta.remaining() < METASIZE) {
+    if(span.kvmeta.remaining() < METASIZE) {
       this.sort();
-      if (span.length() == 0) {
-        spillSingleRecord(key, value, partition);
-        return;
-      }
     }
     int keystart = span.kvbuffer.position();
     int valstart = -1;
     int valend = -1;
-    try {
+    try { 
       keySerializer.serialize(key);
       valstart = span.kvbuffer.position();      
       valSerializer.serialize(value);
@@ -401,13 +296,13 @@ public class PipelinedSorter extends ExternalSorter {
       // restore limit
       span.kvbuffer.position(keystart);
       this.sort();
-      if (span.length() == 0 || bufferOverflowRecursion > buffers.size()) {
-        // spill the current key value pair
-        spillSingleRecord(key, value, partition);
-        bufferOverflowRecursion = 0;
-        return;
-      }
+
       bufferOverflowRecursion++;
+      if (bufferOverflowRecursion > bufferList.size()) {
+        throw new MapBufferTooSmallException("Record too large for in-memory buffer. Exceeded "
+            + "buffer overflow limit, bufferOverflowRecursion=" + bufferOverflowRecursion + ", bufferList"
+            + ".size=" + bufferList.size() + ", blockSize=" + blockSize);
+      }
       // try again
       this.collect(key, value, partition);
       return;
@@ -431,7 +326,6 @@ public class PipelinedSorter extends ExternalSorter {
     span.kvmeta.put(valstart);
     span.kvmeta.put(valend - valstart);
     mapOutputRecordCounter.increment(1);
-    outputContext.notifyProgress();
     mapOutputByteCounter.increment(valend - keystart);
   }
 
@@ -450,105 +344,29 @@ public class PipelinedSorter extends ExternalSorter {
     }
   }
 
-  // it is guaranteed that when spillSingleRecord is called, there is
-  // no merger spans queued in executor.
-  private void spillSingleRecord(final Object key, final Object value,
-          int partition) throws IOException {
+  public void spill() throws IOException {
+    // create spill file
+    final long size = capacity +
+        + (partitions * APPROX_HEADER_LENGTH);
     final TezSpillRecord spillRec = new TezSpillRecord(partitions);
-    // getSpillFileForWrite with size -1 as the serialized size of KV pair is still unknown
-    final Path filename = mapOutputFile.getSpillFileForWrite(numSpills, -1);
-    Path indexFilename =
-        mapOutputFile.getSpillIndexFileForWrite(numSpills, partitions
-            * MAP_OUTPUT_INDEX_RECORD_LENGTH);
+    final Path filename =
+      mapOutputFile.getSpillFileForWrite(numSpills, size);
     spillFilePaths.put(numSpills, filename);
     FSDataOutputStream out = rfs.create(filename, true, 4096);
 
     try {
-      LOG.info(outputContext.getDestinationVertexName() + ": Spilling to " + filename.toString() +
-          ", indexFilename=" + indexFilename);
+      try {
+        merger.ready(); // wait for all the future results from sort threads
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        LOG.info("Interrupted while waiting for mergers to complete");
+        throw new IOInterruptedException("Interrupted while waiting for mergers to complete", e);
+      }
+      LOG.info("Spilling to " + filename.toString());
       for (int i = 0; i < partitions; ++i) {
         if (isThreadInterrupted()) {
           return;
         }
-        Writer writer = null;
-        try {
-          long segmentStart = out.getPos();
-          writer = new Writer(conf, out, keyClass, valClass, codec,
-              spilledRecordsCounter, null, false);
-          // we need not check for combiner since its a single record
-          if (i == partition) {
-            final long recordStart = out.getPos();
-            writer.append(key, value);
-            mapOutputRecordCounter.increment(1);
-            mapOutputByteCounter.increment(out.getPos() - recordStart);
-          }
-
-          writer.close();
-          adjustSpillCounters(writer.getRawLength(), writer.getCompressedLength());
-
-          // record offsets
-          final TezIndexRecord rec =
-              new TezIndexRecord(
-                  segmentStart,
-                  writer.getRawLength(),
-                  writer.getCompressedLength());
-          spillRec.putIndex(rec, i);
-          writer = null;
-        } finally {
-          if (null != writer) {
-            writer.close();
-          }
-        }
-      }
-
-      spillFileIndexPaths.put(numSpills, indexFilename);
-      spillRec.writeToFile(indexFilename, conf);
-      //TODO: honor cache limits
-      indexCacheList.add(spillRec);
-      ++numSpills;
-      if (!isFinalMergeEnabled()) {
-          fileOutputByteCounter.increment(rfs.getFileStatus(filename).getLen());
-          //No final merge. Set the number of files offered via shuffle-handler
-          numShuffleChunks.setValue(numSpills);
-      }
-      if (pipelinedShuffle) {
-        sendPipelinedShuffleEvents();
-      }
-    } finally {
-        out.close();
-    }
-  }
-
-  public boolean spill(boolean ignoreEmptySpills) throws IOException {
-    FSDataOutputStream out = null;
-    try {
-      try {
-        boolean ret = merger.ready();
-        // if merger returned false and ignore merge is true,
-        // then return directly without spilling
-        if (!ret && ignoreEmptySpills){
-          return false;
-        }
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        LOG.info(outputContext.getDestinationVertexName() + ": Interrupted while waiting for mergers to complete");
-        throw new IOInterruptedException(outputContext.getDestinationVertexName() + ": Interrupted while waiting for mergers to complete", e);
-      }
-
-      // create spill file
-      final long size = capacity +
-          + (partitions * APPROX_HEADER_LENGTH);
-      final TezSpillRecord spillRec = new TezSpillRecord(partitions);
-      final Path filename =
-        mapOutputFile.getSpillFileForWrite(numSpills, size);
-      spillFilePaths.put(numSpills, filename);
-      out = rfs.create(filename, true, 4096);
-      LOG.info(outputContext.getDestinationVertexName() + ": Spilling to " + filename.toString());
-      for (int i = 0; i < partitions; ++i) {
-        if (isThreadInterrupted()) {
-          return false;
-        }
-        outputContext.notifyProgress();
         TezRawKeyValueIterator kvIter = merger.filter(i);
         //write merged output to disk
         long segmentStart = out.getPos();
@@ -565,6 +383,7 @@ public class PipelinedSorter extends ExternalSorter {
         //close
         writer.close();
         adjustSpillCounters(writer.getRawLength(), writer.getCompressedLength());
+
         // record offsets
         final TezIndexRecord rec = 
             new TezIndexRecord(
@@ -572,9 +391,6 @@ public class PipelinedSorter extends ExternalSorter {
                 writer.getRawLength(),
                 writer.getCompressedLength());
         spillRec.putIndex(rec, i);
-        if (!isFinalMergeEnabled() && reportPartitionStats()) {
-          partitionStats[i] += writer.getCompressedLength();
-        }
       }
 
       Path indexFilename =
@@ -590,11 +406,8 @@ public class PipelinedSorter extends ExternalSorter {
         //No final merge. Set the number of files offered via shuffle-handler
         numShuffleChunks.setValue(numSpills);
       }
-      return true;
     } finally {
-      if (out != null) {
-        out.close();
-      }
+      out.close();
     }
   }
 
@@ -604,7 +417,7 @@ public class PipelinedSorter extends ExternalSorter {
         cleanup();
       }
       sortmaster.shutdownNow();
-      LOG.info(outputContext.getDestinationVertexName() + ": Thread interrupted, cleaned up stale data, sorter threads shutdown=" + sortmaster
+      LOG.info("Thread interrupted, cleaned up stale data, sorter threads shutdown=" + sortmaster
           .isShutdown() + ", terminated=" + sortmaster.isTerminated());
       return true;
     }
@@ -615,7 +428,6 @@ public class PipelinedSorter extends ExternalSorter {
   public void flush() throws IOException {
     final String uniqueIdentifier = outputContext.getUniqueIdentifier();
 
-    outputContext.notifyProgress();
     /**
      * Possible that the thread got interrupted when flush was happening or when the flush was
      * never invoked. As a part of cleanup activity in TezTaskRunner, it would invoke close()
@@ -626,33 +438,18 @@ public class PipelinedSorter extends ExternalSorter {
     }
 
     try {
-      LOG.info(outputContext.getDestinationVertexName() + ": Starting flush of map output");
+      LOG.info("Starting flush of map output");
       span.end();
       merger.add(span.sort(sorter));
-      // force a spill in flush()
-      // case 1: we want to force because of following scenarios:
-      // we have no keys written, and flush got called
-      // we want atleast one spill(be it empty)
-      // case 2: in pipeline shuffle case, we have no way of
-      // knowing the last key being written until flush is called
-      // so for flush()->spill() we want to force spill so that
-      // we can send pipeline shuffle event with last event true.
-      spill(false);
+      spill();
       sortmaster.shutdown();
 
       //safe to clean up
-      buffers.clear();
+      bufferList.clear();
 
 
       if(indexCacheList.isEmpty()) {
-        /*
-         * If we do not have this check, and if the task gets killed in the middle, it can throw
-         * NPE leading to distraction when debugging.
-         */
-        if (LOG.isDebugEnabled()) {
-          LOG.debug(outputContext.getDestinationVertexName()
-              + ": Index list is empty... returning");
-        }
+        LOG.warn("Index list is empty... returning");
         return;
       }
 
@@ -666,11 +463,12 @@ public class PipelinedSorter extends ExternalSorter {
 
         for (int i = startIndex; i < endIndex; i++) {
           boolean isLastEvent = (i == numSpills - 1);
+
           String pathComponent = (outputContext.getUniqueIdentifier() + "_" + i);
           ShuffleUtils.generateEventOnSpill(events, isFinalMergeEnabled(), isLastEvent,
               outputContext, i, indexCacheList.get(i), partitions,
-              sendEmptyPartitionDetails, pathComponent, partitionStats);
-          LOG.info(outputContext.getDestinationVertexName() + ": Adding spill event for spill (final update=" + isLastEvent + "), spillId=" + i);
+              sendEmptyPartitionDetails, pathComponent);
+          LOG.info("Adding spill event for spill (final update=" + isLastEvent + "), spillId=" + i);
         }
         outputContext.sendEvents(events);
         return;
@@ -689,21 +487,13 @@ public class PipelinedSorter extends ExternalSorter {
 
         sameVolRename(filename, finalOutputFile);
         sameVolRename(indexFilename, finalIndexFile);
-        if (LOG.isDebugEnabled()) {
-          LOG.debug(outputContext.getDestinationVertexName() + ": numSpills=" + numSpills +
-              ", finalOutputFile=" + finalOutputFile + ", "
+        if (LOG.isInfoEnabled()) {
+          LOG.info("numSpills=" + numSpills + ", finalOutputFile=" + finalOutputFile + ", "
               + "finalIndexFile=" + finalIndexFile + ", filename=" + filename + ", indexFilename=" +
               indexFilename);
         }
-        TezSpillRecord spillRecord = new TezSpillRecord(finalIndexFile, conf);
-        if (reportPartitionStats()) {
-          for (int i = 0; i < spillRecord.size(); i++) {
-            partitionStats[i] += spillRecord.getIndex(i).getPartLength();
-          }
-        }
         numShuffleChunks.setValue(numSpills);
         fileOutputByteCounter.increment(rfs.getFileStatus(finalOutputFile).getLen());
-        // ??? why are events not being sent here?
         return;
       }
 
@@ -713,10 +503,11 @@ public class PipelinedSorter extends ExternalSorter {
           mapOutputFile.getOutputIndexFileForWrite(0); //TODO
 
       if (LOG.isDebugEnabled()) {
-        LOG.debug(outputContext.getDestinationVertexName() + ": " +
+        LOG.debug(
             "numSpills: " + numSpills + ", finalOutputFile:" + finalOutputFile + ", finalIndexFile:"
                 + finalIndexFile);
       }
+
       //The output stream for the final single output file
       FSDataOutputStream finalOut = rfs.create(finalOutputFile, true, 4096);
 
@@ -748,16 +539,17 @@ public class PipelinedSorter extends ExternalSorter {
             segmentList, mergeFactor,
             new Path(uniqueIdentifier),
             (RawComparator) ConfigUtils.getIntermediateOutputKeyComparator(conf),
-            progressable, sortSegments, true,
+            nullProgressable, sortSegments, true,
             null, spilledRecordsCounter, additionalSpillBytesRead,
             null); // Not using any Progress in TezMerger. Should just work.
+
         //write merged output to disk
         long segmentStart = finalOut.getPos();
         Writer writer =
             new Writer(conf, finalOut, keyClass, valClass, codec,
                 spilledRecordsCounter, null, merger.needsRLE());
         if (combiner == null || numSpills < minSpillsForCombine) {
-          TezMerger.writeFile(kvIter, writer, progressable,
+          TezMerger.writeFile(kvIter, writer, nullProgressable,
               TezRuntimeConfiguration.TEZ_RUNTIME_RECORDS_BEFORE_PROGRESS_DEFAULT);
         } else {
           runCombineProcessor(kvIter, writer);
@@ -774,9 +566,6 @@ public class PipelinedSorter extends ExternalSorter {
                 writer.getRawLength(),
                 writer.getCompressedLength());
         spillRec.putIndex(rec, parts);
-        if (reportPartitionStats()) {
-          partitionStats[parts] += writer.getCompressedLength();
-        }
       }
 
       numShuffleChunks.setValue(1); //final merge has happened.
@@ -854,14 +643,13 @@ public class PipelinedSorter extends ExternalSorter {
     }
   }
 
-  private final class SortSpan implements IndexedSortable {
+  private final class SortSpan  implements IndexedSortable {
     final IntBuffer kvmeta;
-    final byte[] rawkvmeta;
-    final int kvmetabase;
     final ByteBuffer kvbuffer;
     final DataOutputStream out;
     final RawComparator comparator;
-    final byte[] imeta = new byte[METASIZE];
+    final int imeta[] = new int[NMETA];
+    final int jmeta[] = new int[NMETA];
 
     private int index = 0;
     private long eq = 0;
@@ -879,16 +667,14 @@ public class PipelinedSorter extends ExternalSorter {
       }
       ByteBuffer reserved = source.duplicate();
       reserved.mark();
-      LOG.info(outputContext.getDestinationVertexName() + ": " + "reserved.remaining()=" +
-          reserved.remaining() + ", reserved.metasize=" + metasize);
+      LOG.info("reserved.remaining() = " + reserved.remaining());
+      LOG.info("reserved.size = "+ metasize);
       reserved.position(metasize);
       kvbuffer = reserved.slice();
       reserved.flip();
       reserved.limit(metasize);
-      ByteBuffer kvmetabuffer = reserved.slice();
-      rawkvmeta = kvmetabuffer.array();
-      kvmetabase = kvmetabuffer.arrayOffset();
-      kvmeta = kvmetabuffer
+      kvmeta = reserved
+                .slice()
                 .order(ByteOrder.nativeOrder())
                .asIntBuffer();
       out = new DataOutputStream(
@@ -899,11 +685,11 @@ public class PipelinedSorter extends ExternalSorter {
     public SpanIterator sort(IndexedSorter sorter) {
       long start = System.currentTimeMillis();
       if(length() > 1) {
-        sorter.sort(this, 0, length(), progressable);
+        sorter.sort(this, 0, length(), nullProgressable);
       }
-      LOG.info(outputContext.getDestinationVertexName() + ": " + "done sorting span=" + index + ", length=" + length() + ", "
+      LOG.info("done sorting span=" + index + ", length=" + length() + ", "
           + "time=" + (System.currentTimeMillis() - start));
-      return new SpanIterator((SortSpan)this);
+      return new SpanIterator(this);
     }
 
     int offsetFor(int i) {
@@ -914,14 +700,13 @@ public class PipelinedSorter extends ExternalSorter {
       final int kvi = offsetFor(mi);
       final int kvj = offsetFor(mj);
 
-      final int kvioff = kvmetabase + (kvi << 2);
-      final int kvjoff = kvmetabase + (kvj << 2);
-      System.arraycopy(rawkvmeta, kvioff, imeta, 0, METASIZE);
-      System.arraycopy(rawkvmeta, kvjoff, rawkvmeta, kvioff, METASIZE);
-      System.arraycopy(imeta, 0, rawkvmeta, kvjoff, METASIZE);
+      kvmeta.position(kvi); kvmeta.get(imeta);
+      kvmeta.position(kvj); kvmeta.get(jmeta);
+      kvmeta.position(kvj); kvmeta.put(imeta);
+      kvmeta.position(kvi); kvmeta.put(jmeta);
     }
 
-    protected int compareKeys(final int kvi, final int kvj) {
+    private int compareKeys(final int kvi, final int kvj) {
       final int istart = kvmeta.get(kvi + KEYSTART);
       final int jstart = kvmeta.get(kvj + KEYSTART);
       final int ilen   = kvmeta.get(kvi + VALSTART) - istart;
@@ -970,7 +755,7 @@ public class PipelinedSorter extends ExternalSorter {
         newSpan = new SortSpan(remaining, items, perItem,
             ConfigUtils.getIntermediateOutputKeyComparator(conf));
         newSpan.index = index+1;
-        LOG.info(String.format(outputContext.getDestinationVertexName() + ": " + "New Span%d.length = %d, perItem = %d", newSpan.index, newSpan
+        LOG.info(String.format("New Span%d.length = %d, perItem = %d", newSpan.index, newSpan
             .length(), perItem) + ", counter:" + mapOutputRecordCounter.getValue());
         return newSpan;
       }
@@ -992,15 +777,14 @@ public class PipelinedSorter extends ExternalSorter {
         return null;
       }
       int perItem = kvbuffer.position()/items;
-      LOG.info(outputContext.getDestinationVertexName() + ": " + String.format("Span%d.length = %d, perItem = %d", index, length(), perItem));
+      LOG.info(String.format("Span%d.length = %d, perItem = %d", index, length(), perItem));
       if(remaining.remaining() < METASIZE+perItem) {
         //Check if we can get the next Buffer from the main buffer list
-        ByteBuffer space = allocateSpace();
-        if (space != null) {
-          LOG.info(outputContext.getDestinationVertexName() + ": " + "Getting memory from next block in the list, recordsWritten=" +
+        if (listIterator.hasNext()) {
+          LOG.info("Getting memory from next block in the list, recordsWritten=" +
               mapOutputRecordCounter.getValue());
           reinit = true;
-          return space;
+          return listIterator.next();
         }
         return null;
       }
@@ -1046,7 +830,7 @@ public class PipelinedSorter extends ExternalSorter {
     private final SortSpan span;
     private final InputByteBuffer key = new InputByteBuffer();
     private final InputByteBuffer value = new InputByteBuffer();
-    private final Progress progress = new LocalProgress();
+    private final Progress progress = new Progress();
 
     private static final int minrun = (1 << 4);
 
@@ -1285,19 +1069,16 @@ public class PipelinedSorter extends ExternalSorter {
         }
 
         StringBuilder sb = new StringBuilder();
-        if (heap.size() == 0) {
-          return false;
-        }
         for(SpanIterator sp: heap) {
             sb.append(sp.toString());
             sb.append(",");
             total += sp.span.length();
             eq += sp.span.getEq();
         }
-        LOG.info(outputContext.getDestinationVertexName() + ": " + "Heap = " + sb.toString());
+        LOG.info("Heap = " + sb.toString());
         return true;
       } catch(ExecutionException e) {
-        LOG.info(outputContext.getDestinationVertexName() + ": " + e.toString());
+        LOG.info(e.toString());
         return false;
       }
     }

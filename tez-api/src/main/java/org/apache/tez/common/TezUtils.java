@@ -162,7 +162,7 @@ public class TezUtils {
     JSONObject jsonObject = new JSONObject();
     try {
       if (description != null && !description.isEmpty()) {
-        jsonObject.put(ATSConstants.DESC, description);
+        jsonObject.put(ATSConstants.DESCRIPTION, description);
       }
       if (conf != null) {
         JSONObject confJson = new JSONObject();

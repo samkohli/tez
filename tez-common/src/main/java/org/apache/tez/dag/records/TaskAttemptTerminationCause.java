@@ -23,7 +23,6 @@ public enum TaskAttemptTerminationCause {
   
   TERMINATED_BY_CLIENT, // Killed by client command
   TERMINATED_AT_SHUTDOWN, // Killed due execution shutdown
-  TERMINATED_AT_RECOVERY, // Killed in recovery, due to can not recover running task attempt
   INTERNAL_PREEMPTION, // Killed by Tez to makes space for higher pri work
   EXTERNAL_PREEMPTION, // Killed by the cluster to make space for other work
   TERMINATED_INEFFECTIVE_SPECULATION, // Killed speculative attempt because original succeeded
@@ -35,7 +34,6 @@ public enum TaskAttemptTerminationCause {
   INPUT_READ_ERROR, // Failed due to error in reading inputs
   OUTPUT_WRITE_ERROR, // Failed due to error in writing outputs
   OUTPUT_LOST, // Failed because attempts output were reported lost
-  NO_PROGRESS, // Failed because no progress was being made
   TASK_HEARTBEAT_ERROR, // Failed because AM lost connection to the task
   
   CONTAINER_LAUNCH_FAILED, // Failed to launch container
@@ -43,10 +41,5 @@ public enum TaskAttemptTerminationCause {
   CONTAINER_STOPPED, // Container stopped or released by Tez
   NODE_FAILED, // Node for the container failed
   NODE_DISK_ERROR, // Disk failed on the node runnign the task
-
-  COMMUNICATION_ERROR, // Equivalent to a launch failure
-  SERVICE_BUSY, // Service rejected the task
-  INTERRUPTED_BY_SYSTEM, // Interrupted by the system. e.g. Pre-emption
-  INTERRUPTED_BY_USER, // Interrupted by the user
-
+  
 }

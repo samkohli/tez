@@ -47,7 +47,6 @@ import org.apache.tez.dag.app.dag.Vertex;
 import org.apache.tez.dag.app.dag.event.CallableEvent;
 import org.apache.tez.dag.app.dag.event.VertexEventInputDataInformation;
 import org.apache.tez.runtime.api.Event;
-import org.apache.tez.runtime.api.TaskAttemptIdentifier;
 import org.apache.tez.runtime.api.events.InputDataInformationEvent;
 import org.apache.tez.runtime.api.events.VertexManagerEvent;
 import org.apache.tez.runtime.api.impl.TezEvent;
@@ -184,11 +183,11 @@ public class TestVertexManager {
     }
 
     @Override
-    public void onVertexStarted(List<TaskAttemptIdentifier> completions) {
+    public void onVertexStarted(Map<String, List<Integer>> completions) {
     }
 
     @Override
-    public void onSourceTaskCompleted(TaskAttemptIdentifier attempt) {
+    public void onSourceTaskCompleted(String srcVertexName, Integer taskId) {
     }
 
     @Override

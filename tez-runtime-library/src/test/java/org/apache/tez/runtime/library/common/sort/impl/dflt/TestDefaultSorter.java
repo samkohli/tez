@@ -22,7 +22,6 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.anyLong;
-import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
@@ -32,18 +31,14 @@ import static org.mockito.internal.verification.VerificationModeFactory.times;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.List;
-import java.util.concurrent.ThreadLocalRandom;
 
 import com.google.protobuf.ByteString;
 import org.apache.commons.lang.RandomStringUtils;
-import org.apache.commons.lang.StringUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.DataOutputBuffer;
-import org.apache.hadoop.io.NullWritable;
 import org.apache.hadoop.io.Text;
-import org.apache.hadoop.util.StringInterner;
 import org.apache.tez.common.TezRuntimeFrameworkConfigs;
 import org.apache.tez.common.TezUtils;
 import org.apache.tez.common.counters.TaskCounter;
@@ -54,7 +49,6 @@ import org.apache.tez.runtime.api.Event;
 import org.apache.tez.runtime.api.ExecutionContext;
 import org.apache.tez.runtime.api.MemoryUpdateCallback;
 import org.apache.tez.runtime.api.OutputContext;
-import org.apache.tez.runtime.api.OutputStatisticsReporter;
 import org.apache.tez.runtime.api.events.CompositeDataMovementEvent;
 import org.apache.tez.runtime.api.impl.ExecutionContextImpl;
 import org.apache.tez.runtime.library.api.TezRuntimeConfiguration;
@@ -67,7 +61,6 @@ import org.apache.tez.runtime.library.shuffle.impl.ShuffleUserPayloads;
 import org.junit.After;
 import org.junit.AfterClass;
 import org.junit.Before;
-import org.junit.Ignore;
 import org.junit.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.invocation.InvocationOnMock;
@@ -133,101 +126,21 @@ public class TestDefaultSorter {
     }
   }
 
-
-  @Test
-  @Ignore
-  /**
-   * Disabling this, as this would need 2047 MB sort mb for testing.
-   * Set DefaultSorter.MAX_IO_SORT_MB = 20467 for running this.
-   */
-  public void testSortLimitsWithSmallRecord() throws IOException {
-    conf.set(TezRuntimeConfiguration.TEZ_RUNTIME_KEY_CLASS, Text.class.getName());
-    conf.set(TezRuntimeConfiguration.TEZ_RUNTIME_VALUE_CLASS, NullWritable.class.getName());
-    OutputContext context = createTezOutputContext();
-
-    doReturn(2800 * 1024 * 1024l).when(context).getTotalMemoryAvailableToTask();
-
-    //Setting IO_SORT_MB to 2047 MB
-    conf.setInt(TezRuntimeConfiguration.TEZ_RUNTIME_IO_SORT_MB, 2047);
-    context.requestInitialMemory(
-        ExternalSorter.getInitialMemoryRequirement(conf,
-            context.getTotalMemoryAvailableToTask()), new MemoryUpdateCallbackHandler());
-
-    DefaultSorter sorter = new DefaultSorter(context, conf, 2, 2047 << 20);
-
-    //Reset key/value in conf back to Text for other test cases
-    conf.set(TezRuntimeConfiguration.TEZ_RUNTIME_KEY_CLASS, Text.class.getName());
-    conf.set(TezRuntimeConfiguration.TEZ_RUNTIME_VALUE_CLASS, Text.class.getName());
-
-    int i = 0;
-    /**
-     * If io.sort.mb is not capped to 1800, this would end up throwing
-     * "java.lang.ArrayIndexOutOfBoundsException" after many spills.
-     * Intentionally made it as infinite loop.
-     */
-    while (true) {
-      //test for the avg record size 2 (in lower spectrum)
-      Text key = new Text(i + "");
-      sorter.write(key, NullWritable.get());
-      i = (i + 1) % 10;
-    }
-  }
-
-  @Test
-  @Ignore
-  /**
-   * Disabling this, as this would need 2047 MB io.sort.mb for testing.
-   * Provide > 2GB to JVM when running this test to avoid OOM in string generation.
-   *
-   * Set DefaultSorter.MAX_IO_SORT_MB = 2047 for running this.
-   */
-  public void testSortLimitsWithLargeRecords() throws IOException {
-    OutputContext context = createTezOutputContext();
-
-    doReturn(2800 * 1024 * 1024l).when(context).getTotalMemoryAvailableToTask();
-
-    //Setting IO_SORT_MB to 2047 MB
-    conf.setInt(TezRuntimeConfiguration.TEZ_RUNTIME_IO_SORT_MB, 2047);
-    context.requestInitialMemory(
-        ExternalSorter.getInitialMemoryRequirement(conf,
-            context.getTotalMemoryAvailableToTask()), new MemoryUpdateCallbackHandler());
-
-    DefaultSorter sorter = new DefaultSorter(context, conf, 2, 2047 << 20);
-
-    int i = 0;
-    /**
-     * If io.sort.mb is not capped to 1800, this would end up throwing
-     * "java.lang.ArrayIndexOutOfBoundsException" after many spills.
-     * Intentionally made it as infinite loop.
-     */
-    while (true) {
-      Text key = new Text(i + "");
-      //Generate random size between 1 MB to 100 MB.
-      int valSize = ThreadLocalRandom.current().nextInt(1 * 1024 * 1024, 100 * 1024 * 1024);
-      String val = StringInterner.weakIntern(StringUtils.repeat("v", valSize));
-      sorter.write(key, new Text(val));
-      i = (i + 1) % 10;
-    }
-  }
-
-
   @Test(timeout = 5000)
   public void testSortMBLimits() throws Exception {
 
-    assertTrue("Expected " + DefaultSorter.MAX_IO_SORT_MB,
-        DefaultSorter.computeSortBufferSize(4096, "") == DefaultSorter.MAX_IO_SORT_MB);
-    assertTrue("Expected " + DefaultSorter.MAX_IO_SORT_MB,
-        DefaultSorter.computeSortBufferSize(2047, "") == DefaultSorter.MAX_IO_SORT_MB);
-    assertTrue("Expected 1024", DefaultSorter.computeSortBufferSize(1024, "") == 1024);
+    assertTrue("Expected 2047", DefaultSorter.computeSortBufferSize(4096) == 2047);
+    assertTrue("Expected 2047", DefaultSorter.computeSortBufferSize(2047) == 2047);
+    assertTrue("Expected 1024", DefaultSorter.computeSortBufferSize(1024) == 1024);
 
     try {
-      DefaultSorter.computeSortBufferSize(0, "");
+      DefaultSorter.computeSortBufferSize(0);
       fail("Should have thrown error for setting buffer size to 0");
     } catch(RuntimeException re) {
     }
 
     try {
-      DefaultSorter.computeSortBufferSize(-100, "");
+      DefaultSorter.computeSortBufferSize(-100);
       fail("Should have thrown error for setting buffer size to negative value");
     } catch(RuntimeException re) {
     }
@@ -252,7 +165,7 @@ public class TestDefaultSorter {
 
     conf.setLong(TezRuntimeConfiguration.TEZ_RUNTIME_IO_SORT_MB, 1);
     context.requestInitialMemory(ExternalSorter.getInitialMemoryRequirement(conf,
-        context.getTotalMemoryAvailableToTask()), handler);
+            context.getTotalMemoryAvailableToTask()), handler);
     DefaultSorter sorter = new DefaultSorter(context, conf, 5, handler.getMemoryAssigned());
 
     //Write 1000 keys each of size 1000, (> 1 spill should happen)
@@ -307,38 +220,6 @@ public class TestDefaultSorter {
     } catch(Exception e) {
       fail();
     }
-  }
-
-  void testPartitionStats(boolean withStats) throws IOException {
-    conf.setBoolean(TezRuntimeConfiguration.TEZ_RUNTIME_REPORT_PARTITION_STATS, withStats);
-    OutputContext context = createTezOutputContext();
-
-    conf.setBoolean(TezRuntimeConfiguration.TEZ_RUNTIME_ENABLE_FINAL_MERGE_IN_OUTPUT, false);
-    conf.setLong(TezRuntimeConfiguration.TEZ_RUNTIME_IO_SORT_MB, 4);
-    MemoryUpdateCallbackHandler handler = new MemoryUpdateCallbackHandler();
-    context.requestInitialMemory(ExternalSorter.getInitialMemoryRequirement(conf,
-        context.getTotalMemoryAvailableToTask()), handler);
-    DefaultSorter sorter = new DefaultSorter(context, conf, 1, handler.getMemoryAssigned());
-
-    writeData(sorter, 1000, 10);
-    assertTrue(sorter.getNumSpills() == 1);
-    verifyCounters(sorter, context);
-
-    if (withStats) {
-      assertTrue(sorter.getPartitionStats() != null);
-    } else {
-      assertTrue(sorter.getPartitionStats() == null);
-    }
-  }
-
-  @Test(timeout = 60000)
-  public void testWithPartitionStats() throws IOException {
-    testPartitionStats(true);
-  }
-
-  @Test(timeout = 60000)
-  public void testWithoutPartitionStats() throws IOException {
-    testPartitionStats(false);
   }
 
   @Test(timeout = 60000)
@@ -430,7 +311,6 @@ public class TestDefaultSorter {
     TezCounter outputBytesWithOverheadCounter = context.getCounters().findCounter
         (TaskCounter.OUTPUT_BYTES_WITH_OVERHEAD);
     assertTrue(outputBytesWithOverheadCounter.getValue() > 0);
-    verify(context, atLeastOnce()).notifyProgress();
   }
 
   private void writeData(ExternalSorter sorter, int numKeys, int keyLen) throws IOException {
@@ -453,7 +333,6 @@ public class TestDefaultSorter {
 
     OutputContext context = mock(OutputContext.class);
     ExecutionContext execContext = new ExecutionContextImpl("localhost");
-    doReturn(mock(OutputStatisticsReporter.class)).when(context).getStatisticsReporter();
     doReturn(execContext).when(context).getExecutionContext();
     doReturn(counters).when(context).getCounters();
     doReturn(workingDirs).when(context).getWorkDirs();

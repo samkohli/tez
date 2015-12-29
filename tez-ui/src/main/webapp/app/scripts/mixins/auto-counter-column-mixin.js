@@ -32,7 +32,7 @@ App.AutoCounterColumnMixin = Em.Mixin.create({
         App.get('Configs.tables.entity.' + this.get('baseEntityType')) || [],
         App.get('Configs.tables.sharedColumns') || []
       )
-    , this), dynamicCounterConfigs = [];
+    ), dynamicCounterConfigs = [];
 
     this.get('data').forEach(function (row) {
       var counterGroups = row.get('counterGroups');

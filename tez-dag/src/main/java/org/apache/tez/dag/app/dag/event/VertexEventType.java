@@ -57,6 +57,9 @@ public enum VertexEventType {
   
   // Producer: Vertex
   V_READY_TO_INIT,
+
+  // Recover Event, Producer:Vertex
+  V_SOURCE_VERTEX_RECOVERED,
   
   // Producer: Edge
   V_NULL_EDGE_INITIALIZED,

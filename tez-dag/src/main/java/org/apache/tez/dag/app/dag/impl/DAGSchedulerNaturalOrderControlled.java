@@ -36,6 +36,7 @@ import org.apache.tez.dag.app.dag.DAGScheduler;
 import org.apache.tez.dag.app.dag.TaskAttempt;
 import org.apache.tez.dag.app.dag.Vertex;
 import org.apache.tez.dag.app.dag.event.DAGEventSchedulerUpdate;
+import org.apache.tez.dag.app.dag.event.DAGEventSchedulerUpdateTAAssigned;
 import org.apache.tez.dag.app.dag.event.TaskAttemptEventSchedule;
 import org.apache.tez.dag.records.TezTaskAttemptID;
 
@@ -49,7 +50,7 @@ import org.apache.tez.dag.records.TezTaskAttemptID;
  * - generic slow start mechanism across all vertices - independent of the type of edges.
  */
 @SuppressWarnings("rawtypes")
-public class DAGSchedulerNaturalOrderControlled extends DAGScheduler {
+public class DAGSchedulerNaturalOrderControlled implements DAGScheduler {
 
   private static final Logger LOG =
       LoggerFactory.getLogger(DAGSchedulerNaturalOrderControlled.class);
@@ -71,9 +72,13 @@ public class DAGSchedulerNaturalOrderControlled extends DAGScheduler {
     this.handler = dispatcher;
   }
 
+  @Override
+  public void vertexCompleted(Vertex vertex) {
+  }
+
   // TODO Does ordering matter - it currently depends on the order returned by vertex.getOutput*
   @Override
-  public void scheduleTaskEx(DAGEventSchedulerUpdate event) {
+  public void scheduleTask(DAGEventSchedulerUpdate event) {
     TaskAttempt attempt = event.getAttempt();
     Vertex vertex = dag.getVertex(attempt.getVertexID());
     int vertexDistanceFromRoot = vertex.getDistanceFromRoot();
@@ -236,7 +241,11 @@ public class DAGSchedulerNaturalOrderControlled extends DAGScheduler {
   }
 
   @Override
-  public void taskCompletedEx(DAGEventSchedulerUpdate event) {
+  public void taskScheduled(DAGEventSchedulerUpdateTAAssigned event) {
+  }
+
+  @Override
+  public void taskSucceeded(DAGEventSchedulerUpdate event) {
   }
 
   @SuppressWarnings("unchecked")

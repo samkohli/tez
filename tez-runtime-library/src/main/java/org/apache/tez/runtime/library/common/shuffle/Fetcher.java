@@ -28,13 +28,11 @@ import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.nio.channels.OverlappingFileLockException;
 import java.util.Arrays;
-import java.util.Collection;
 import java.util.HashMap;
 import java.util.Iterator;
-import java.util.LinkedHashMap;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -89,7 +87,6 @@ public class Fetcher extends CallableWithNdc<FetchResult> {
   private final FetcherCallback fetcherCallback;
   private final FetchedInputAllocator inputManager;
   private final ApplicationId appId;
-  private final int dagIdentifier;
   
   private final String logIdentifier;
 
@@ -101,14 +98,13 @@ public class Fetcher extends CallableWithNdc<FetchResult> {
 
   // Parameters to track work.
   private List<InputAttemptIdentifier> srcAttempts;
-  @VisibleForTesting
-  Map<String, InputAttemptIdentifier> srcAttemptsRemaining;
   private String host;
   private int port;
   private int partition;
 
   // Maps from the pathComponents (unique per srcTaskId) to the specific taskId
   private final Map<String, InputAttemptIdentifier> pathToAttemptMap;
+  private List<InputAttemptIdentifier> remaining;
 
   private URL url;
   private volatile DataInputStream input;
@@ -131,7 +127,7 @@ public class Fetcher extends CallableWithNdc<FetchResult> {
   private final boolean isDebugEnabled = LOG.isDebugEnabled();
 
   private Fetcher(FetcherCallback fetcherCallback, HttpConnectionParams params,
-      FetchedInputAllocator inputManager, ApplicationId appId, int dagIdentifier,
+      FetchedInputAllocator inputManager, ApplicationId appId,
       JobTokenSecretManager jobTokenSecretManager, String srcNameTrimmed, Configuration conf,
       RawLocalFileSystem localFs,
       LocalDirAllocator localDirAllocator,
@@ -145,7 +141,6 @@ public class Fetcher extends CallableWithNdc<FetchResult> {
     this.inputManager = inputManager;
     this.jobTokenSecretMgr = jobTokenSecretManager;
     this.appId = appId;
-    this.dagIdentifier = dagIdentifier;
     this.pathToAttemptMap = new HashMap<String, InputAttemptIdentifier>();
     this.httpConnectionParams = params;
     this.conf = conf;
@@ -171,16 +166,6 @@ public class Fetcher extends CallableWithNdc<FetchResult> {
     }
   }
 
-  // helper method to populate the remaining map
-  void populateRemainingMap(List<InputAttemptIdentifier> origlist) {
-    if (srcAttemptsRemaining == null) {
-      srcAttemptsRemaining = new LinkedHashMap<String, InputAttemptIdentifier>(origlist.size());
-    }
-    for (InputAttemptIdentifier id : origlist) {
-      srcAttemptsRemaining.put(id.toString(), id);
-    }
-  }
-
   @Override
   protected FetchResult callInternal() throws Exception {
     boolean multiplex = (this.sharedFetchEnabled && this.localDiskFetchEnabled);
@@ -189,8 +174,7 @@ public class Fetcher extends CallableWithNdc<FetchResult> {
       return new FetchResult(host, port, partition, srcAttempts);
     }
 
-    populateRemainingMap(srcAttempts);
-    for (InputAttemptIdentifier in : srcAttemptsRemaining.values()) {
+    for (InputAttemptIdentifier in : srcAttempts) {
       pathToAttemptMap.put(in.getPathComponent(), in);
       // do only if all of them are shared fetches
       multiplex &= in.isShared();
@@ -201,6 +185,9 @@ public class Fetcher extends CallableWithNdc<FetchResult> {
           "Shared fetches cannot be done for partitioned input"
               + "- partition is non-zero (%d)", partition);
     }
+
+    //Similar to TEZ-2172 (remove can be expensive with list)
+    remaining = new LinkedList<InputAttemptIdentifier>(srcAttempts);
 
     HostFetchResult hostFetchResult;
 
@@ -219,20 +206,20 @@ public class Fetcher extends CallableWithNdc<FetchResult> {
           fetcherCallback.fetchFailed(host, left, hostFetchResult.connectFailed);
         }
       } else {
-        if (isDebugEnabled) {
-          LOG.debug("Ignoring failed fetch reports for " + hostFetchResult.failedInputs.length +
-              " inputs since the fetcher has already been stopped");
-        }
+        LOG.info("Ignoring failed fetch reports for " + hostFetchResult.failedInputs.length +
+            " inputs since the fetcher has already been stopped");
       }
     }
 
     shutdown();
 
     // Sanity check
-    if (hostFetchResult.failedInputs == null && !srcAttemptsRemaining.isEmpty()) {
+    if (hostFetchResult.failedInputs == null && !remaining.isEmpty()) {
       if (!multiplex) {
         throw new IOException("server didn't return all expected map outputs: "
-            + srcAttemptsRemaining.size() + " left.");
+            + remaining.size() + " left.");
+      } else {
+        LOG.info("Shared fetch failed to return " + remaining.size() + " inputs on this try");
       }
     }
 
@@ -307,7 +294,7 @@ public class Fetcher extends CallableWithNdc<FetchResult> {
 
   private int findInputs() throws IOException {
     int k = 0;
-    for (InputAttemptIdentifier src : srcAttemptsRemaining.values()) {
+    for (InputAttemptIdentifier src : srcAttempts) {
       try {
         if (getShuffleInputFileName(src.getPathComponent(),
             Constants.TEZ_RUNTIME_TASK_OUTPUT_INDEX_SUFFIX_STRING) != null) {
@@ -356,7 +343,7 @@ public class Fetcher extends CallableWithNdc<FetchResult> {
   protected HostFetchResult doSharedFetch() throws IOException {
     int inputs = findInputs();
 
-    if (inputs == srcAttemptsRemaining.size()) {
+    if (inputs == srcAttempts.size()) {
       if (isDebugEnabled) {
         LOG.debug("Using the copies found locally");
       }
@@ -376,10 +363,12 @@ public class Fetcher extends CallableWithNdc<FetchResult> {
       lock = getLock();
       if (lock == null) {
         // re-queue until we get a lock
+        LOG.info("Requeuing " + host + ":" + port
+            + " downloads because we didn't get a lock");
         return new HostFetchResult(new FetchResult(host, port, partition,
-            srcAttemptsRemaining.values(), "Requeuing as we didn't get a lock"), null, false);
+            remaining), null, false);
       } else {
-        if (findInputs() == srcAttemptsRemaining.size()) {
+        if (findInputs() == srcAttempts.size()) {
           // double checked after lock
           releaseLock(lock);
           lock = null;
@@ -403,7 +392,7 @@ public class Fetcher extends CallableWithNdc<FetchResult> {
       // if any exception was due to shut-down don't bother firing any more
       // requests
       return new HostFetchResult(new FetchResult(host, port, partition,
-          srcAttemptsRemaining.values()), null, false);
+          remaining), null, false);
     }
     // no more caching
     return doHttpFetch();
@@ -414,10 +403,10 @@ public class Fetcher extends CallableWithNdc<FetchResult> {
     return doHttpFetch(null);
   }
 
-  private HostFetchResult setupConnection(Collection<InputAttemptIdentifier> attempts) {
+  private HostFetchResult setupConnection(List<InputAttemptIdentifier> attempts) {
     try {
       StringBuilder baseURI = ShuffleUtils.constructBaseURIForShuffleHandler(host,
-          port, partition, appId.toString(), dagIdentifier, httpConnectionParams.isSslShuffle());
+          port, partition, appId.toString(), httpConnectionParams.isSslShuffle());
       this.url = ShuffleUtils.constructInputURL(baseURI.toString(), attempts,
           httpConnectionParams.isKeepAlive());
 
@@ -433,24 +422,19 @@ public class Fetcher extends CallableWithNdc<FetchResult> {
       // indirectly penalizing the host
       InputAttemptIdentifier[] failedFetches = null;
       if (isShutDown.get()) {
-        if (isDebugEnabled) {
-          LOG.debug(
-              "Not reporting fetch failure during connection establishment, since an Exception was caught after shutdown." +
-                  e.getClass().getName() + ", Message: " + e.getMessage());
-        }
+        LOG.info(
+            "Not reporting fetch failure during connection establishment, since an Exception was caught after shutdown." +
+                e.getClass().getName() + ", Message: " + e.getMessage());
       } else {
-        failedFetches = srcAttemptsRemaining.values().
-            toArray(new InputAttemptIdentifier[srcAttemptsRemaining.values().size()]);
+        failedFetches = remaining.toArray(new InputAttemptIdentifier[remaining.size()]);
       }
-      return new HostFetchResult(new FetchResult(host, port, partition, srcAttemptsRemaining.values()), failedFetches, true);
+      return new HostFetchResult(new FetchResult(host, port, partition, remaining), failedFetches, true);
     }
     if (isShutDown.get()) {
       // shutdown would have no effect if in the process of establishing the connection.
       shutdownInternal();
-      if (isDebugEnabled) {
-        LOG.debug("Detected fetcher has been shutdown after connection establishment. Returning");
-      }
-      return new HostFetchResult(new FetchResult(host, port, partition, srcAttemptsRemaining.values()), null, false);
+      LOG.info("Detected fetcher has been shutdown after connection establishment. Returning");
+      return new HostFetchResult(new FetchResult(host, port, partition, remaining), null, false);
     }
 
     try {
@@ -463,16 +447,14 @@ public class Fetcher extends CallableWithNdc<FetchResult> {
       // with the first map, typically lost map. So, penalize only that map
       // and add the rest
       if (isShutDown.get()) {
-        if (isDebugEnabled) {
-          LOG.debug(
-              "Not reporting fetch failure during connection establishment, since an Exception was caught after shutdown." +
-                  e.getClass().getName() + ", Message: " + e.getMessage());
-        }
+        LOG.info(
+            "Not reporting fetch failure during connection establishment, since an Exception was caught after shutdown." +
+                e.getClass().getName() + ", Message: " + e.getMessage());
       } else {
-        InputAttemptIdentifier firstAttempt = attempts.iterator().next();
+        InputAttemptIdentifier firstAttempt = attempts.get(0);
         LOG.warn("Fetch Failure from host while connecting: " + host + ", attempt: " + firstAttempt
             + " Informing ShuffleManager: ", e);
-        return new HostFetchResult(new FetchResult(host, port, partition, srcAttemptsRemaining.values()),
+        return new HostFetchResult(new FetchResult(host, port, partition, remaining),
             new InputAttemptIdentifier[] { firstAttempt }, false);
       }
     } catch (InterruptedException e) {
@@ -485,8 +467,7 @@ public class Fetcher extends CallableWithNdc<FetchResult> {
   @VisibleForTesting
   protected HostFetchResult doHttpFetch(CachingCallBack callback) {
 
-    HostFetchResult connectionsWithRetryResult =
-        setupConnection(srcAttemptsRemaining.values());
+    HostFetchResult connectionsWithRetryResult = setupConnection(srcAttempts);
     if (connectionsWithRetryResult != null) {
       return connectionsWithRetryResult;
     }
@@ -497,10 +478,8 @@ public class Fetcher extends CallableWithNdc<FetchResult> {
     if (isShutDown.get()) {
       // shutdown would have no effect if in the process of establishing the connection.
       shutdownInternal();
-      if (isDebugEnabled) {
-        LOG.debug("Detected fetcher has been shutdown after opening stream. Returning");
-      }
-      return new HostFetchResult(new FetchResult(host, port, partition, srcAttemptsRemaining.values()), null, false);
+      LOG.info("Detected fetcher has been shutdown after opening stream. Returning");
+      return new HostFetchResult(new FetchResult(host, port, partition, remaining), null, false);
     }
     // After this point, closing the stream and connection, should cause a
     // SocketException,
@@ -511,14 +490,11 @@ public class Fetcher extends CallableWithNdc<FetchResult> {
     // after putting back the remaining maps to the
     // yet_to_be_fetched list and marking the failed tasks.
     InputAttemptIdentifier[] failedInputs = null;
-    while (!srcAttemptsRemaining.isEmpty() && failedInputs == null) {
+    while (!remaining.isEmpty() && failedInputs == null) {
       if (isShutDown.get()) {
         shutdownInternal(true);
-        if (isDebugEnabled) {
-          LOG.debug("Fetcher already shutdown. Aborting queued fetches for " +
-              srcAttemptsRemaining.size() + " inputs");
-        }
-        return new HostFetchResult(new FetchResult(host, port, partition, srcAttemptsRemaining.values()), null,
+        LOG.info("Fetcher already shutdown. Aborting queued fetches for " + remaining.size() + " inputs");
+        return new HostFetchResult(new FetchResult(host, port, partition, remaining), null,
             false);
       }
       try {
@@ -527,15 +503,13 @@ public class Fetcher extends CallableWithNdc<FetchResult> {
         //clean up connection
         shutdownInternal(true);
         if (isShutDown.get()) {
-          if (isDebugEnabled) {
-            LOG.debug("Fetcher already shutdown. Aborting reconnection and queued fetches for " +
-                srcAttemptsRemaining.size() + " inputs");
-          }
-          return new HostFetchResult(new FetchResult(host, port, partition, srcAttemptsRemaining.values()), null,
+          LOG.info("Fetcher already shutdown. Aborting reconnection and queued fetches for " + remaining.size() + " inputs");
+          return new HostFetchResult(new FetchResult(host, port, partition, remaining), null,
               false);
         }
         // Connect again.
-        connectionsWithRetryResult = setupConnection(srcAttemptsRemaining.values());
+        connectionsWithRetryResult = setupConnection(
+            new LinkedList<InputAttemptIdentifier>(remaining));
         if (connectionsWithRetryResult != null) {
           break;
         }
@@ -543,13 +517,11 @@ public class Fetcher extends CallableWithNdc<FetchResult> {
     }
 
     if (isShutDown.get() && failedInputs != null && failedInputs.length > 0) {
-      if (isDebugEnabled) {
-        LOG.debug("Fetcher already shutdown. Not reporting fetch failures for: " +
-            failedInputs.length + " failed inputs");
-      }
+      LOG.info("Fetcher already shutdown. Not reporting fetch failures for: " +
+          failedInputs.length + " failed inputs");
       failedInputs = null;
     }
-    return new HostFetchResult(new FetchResult(host, port, partition, srcAttemptsRemaining.values()), failedInputs,
+    return new HostFetchResult(new FetchResult(host, port, partition, remaining), failedInputs,
         false);
   }
 
@@ -561,16 +533,13 @@ public class Fetcher extends CallableWithNdc<FetchResult> {
   @VisibleForTesting
   private HostFetchResult doLocalDiskFetch(boolean failMissing) {
 
-    Iterator<Entry<String, InputAttemptIdentifier>> iterator = srcAttemptsRemaining.entrySet().iterator();
+    Iterator<InputAttemptIdentifier> iterator = remaining.iterator();
     while (iterator.hasNext()) {
       if (isShutDown.get()) {
-        if (isDebugEnabled) {
-          LOG.debug(
-              "Already shutdown. Skipping fetch for " + srcAttemptsRemaining.size() + " inputs");
-        }
+        LOG.info("Already shutdown. Skipping fetch for " + remaining.size() + " inputs");
         break;
       }
-      InputAttemptIdentifier srcAttemptId = iterator.next().getValue();
+      InputAttemptIdentifier srcAttemptId = iterator.next();
       long startTime = System.currentTimeMillis();
 
       FetchedInput fetchedInput = null;
@@ -592,11 +561,9 @@ public class Fetcher extends CallableWithNdc<FetchResult> {
               @Override
               public void freeResources(FetchedInput fetchedInput) {}
             });
-        if (isDebugEnabled) {
-          LOG.debug("fetcher" + " about to shuffle output of srcAttempt (direct disk)" + srcAttemptId
-              + " decomp: " + idxRecord.getRawLength() + " len: " + idxRecord.getPartLength()
-              + " to " + fetchedInput.getType());
-        }
+        LOG.info("fetcher" + " about to shuffle output of srcAttempt (direct disk)" + srcAttemptId
+            + " decomp: " + idxRecord.getRawLength() + " len: " + idxRecord.getPartLength()
+            + " to " + fetchedInput.getType());
 
         long endTime = System.currentTimeMillis();
         fetcherCallback.fetchSucceeded(host, srcAttemptId, fetchedInput, idxRecord.getPartLength(),
@@ -605,12 +572,9 @@ public class Fetcher extends CallableWithNdc<FetchResult> {
       } catch (IOException e) {
         cleanupFetchedInput(fetchedInput);
         if (isShutDown.get()) {
-          if (isDebugEnabled) {
-            LOG.debug(
-                "Already shutdown. Ignoring Local Fetch Failure for " + srcAttemptId +
-                    " from host " +
-                    host + " : " + e.getClass().getName() + ", message=" + e.getMessage());
-          }
+          LOG.info(
+              "Already shutdown. Ignoring Local Fetch Failure for " + srcAttemptId + " from host " +
+                  host + " : " + e.getClass().getName() + ", message=" + e.getMessage());
           break;
         }
         if (failMissing) {
@@ -622,21 +586,17 @@ public class Fetcher extends CallableWithNdc<FetchResult> {
     }
 
     InputAttemptIdentifier[] failedFetches = null;
-    if (failMissing && srcAttemptsRemaining.size() > 0) {
+    if (failMissing && remaining.size() > 0) {
       if (isShutDown.get()) {
-        if (isDebugEnabled) {
-          LOG.debug(
-              "Already shutdown, not reporting fetch failures for: " + srcAttemptsRemaining.size() +
-                  " remaining inputs");
-        }
+        LOG.info("Already shutdown, not reporting fetch failures for: " + remaining.size() +
+            " remaining inputs");
       } else {
-        failedFetches = srcAttemptsRemaining.values().
-            toArray(new InputAttemptIdentifier[srcAttemptsRemaining.values().size()]);
+        failedFetches = remaining.toArray(new InputAttemptIdentifier[remaining.size()]);
       }
     } else {
       // nothing needs to be done to requeue remaining entries
     }
-    return new HostFetchResult(new FetchResult(host, port, partition, srcAttemptsRemaining.values()),
+    return new HostFetchResult(new FetchResult(host, port, partition, remaining),
         failedFetches, false);
   }
 
@@ -682,9 +642,6 @@ public class Fetcher extends CallableWithNdc<FetchResult> {
 
   public void shutdown() {
     if (!isShutDown.getAndSet(true)) {
-      if (LOG.isDebugEnabled()) {
-        LOG.debug("Shutting down fetcher for host: " + host);
-      }
       shutdownInternal();
     }
   }
@@ -705,7 +662,7 @@ public class Fetcher extends CallableWithNdc<FetchResult> {
       } catch (IOException e) {
         LOG.info("Exception while shutting down fetcher on " + logIdentifier + " : "
             + e.getMessage());
-        if (isDebugEnabled) {
+        if (LOG.isDebugEnabled()) {
           LOG.debug(StringUtils.EMPTY, e);
         }
       }
@@ -738,11 +695,9 @@ public class Fetcher extends CallableWithNdc<FetchResult> {
         if (!isShutDown.get()) {
           LOG.warn("Invalid src id ", e);
           // Don't know which one was bad, so consider all of them as bad
-          return srcAttemptsRemaining.values().toArray(new InputAttemptIdentifier[srcAttemptsRemaining.size()]);
+          return remaining.toArray(new InputAttemptIdentifier[remaining.size()]);
         } else {
-          if (isDebugEnabled) {
-            LOG.debug("Already shutdown. Ignoring badId error with message: " + e.getMessage());
-          }
+          LOG.info("Already shutdown. Ignoring badId error with message: " + e.getMessage());
           return null;
         }
       }
@@ -758,14 +713,12 @@ public class Fetcher extends CallableWithNdc<FetchResult> {
           assert (srcAttemptId != null);
           return new InputAttemptIdentifier[]{srcAttemptId};
         } else {
-          if (isDebugEnabled) {
-            LOG.debug("Already shutdown. Ignoring verification failure.");
-          }
+          LOG.info("Already shutdown. Ignoring verification failure.");
           return null;
         }
       }
 
-      if (isDebugEnabled) {
+      if (LOG.isDebugEnabled()) {
         LOG.debug("header: " + srcAttemptId + ", len: " + compressedLength
             + ", decomp len: " + decompressedLength);
       }
@@ -789,12 +742,10 @@ public class Fetcher extends CallableWithNdc<FetchResult> {
       // }
 
       // Go!
-      if (isDebugEnabled) {
-        LOG.debug("fetcher" + " about to shuffle output of srcAttempt "
-            + fetchedInput.getInputAttemptIdentifier() + " decomp: "
-            + decompressedLength + " len: " + compressedLength + " to "
-            + fetchedInput.getType());
-      }
+      LOG.info("fetcher" + " about to shuffle output of srcAttempt "
+          + fetchedInput.getInputAttemptIdentifier() + " decomp: "
+          + decompressedLength + " len: " + compressedLength + " to "
+          + fetchedInput.getType());
 
       if (fetchedInput.getType() == Type.MEMORY) {
         ShuffleUtils.shuffleToMemory(((MemoryFetchedInput) fetchedInput).getBytes(),
@@ -803,7 +754,7 @@ public class Fetcher extends CallableWithNdc<FetchResult> {
           fetchedInput.getInputAttemptIdentifier().toString());
       } else if (fetchedInput.getType() == Type.DISK) {
         ShuffleUtils.shuffleToDisk(((DiskFetchedInput) fetchedInput).getOutputStream(),
-          (host +":" +port), input, compressedLength, decompressedLength, LOG,
+          (host +":" +port), input, compressedLength, LOG,
           fetchedInput.getInputAttemptIdentifier().toString());
       } else {
         throw new TezUncheckedException("Bad fetchedInput type while fetching shuffle data " +
@@ -826,18 +777,15 @@ public class Fetcher extends CallableWithNdc<FetchResult> {
           compressedLength, decompressedLength, (endTime - startTime));
 
       // Note successful shuffle
-      srcAttemptsRemaining.remove(srcAttemptId.toString());
+      remaining.remove(srcAttemptId);
 
       // metrics.successFetch();
       return null;
     } catch (IOException ioe) {
       if (isShutDown.get()) {
         cleanupFetchedInput(fetchedInput);
-        if (isDebugEnabled) {
-          LOG.debug(
-              "Already shutdown. Ignoring exception during fetch " + ioe.getClass().getName() +
-                  ", Message: " + ioe.getMessage());
-        }
+        LOG.info("Already shutdown. Ignoring exception during fetch " + ioe.getClass().getName() +
+            ", Message: " + ioe.getMessage());
         return null;
       }
       if (shouldRetry(srcAttemptId, ioe)) {
@@ -852,8 +800,8 @@ public class Fetcher extends CallableWithNdc<FetchResult> {
         // Cleanup the fetchedInput before returning.
         cleanupFetchedInput(fetchedInput);
         if (srcAttemptId == null) {
-          return srcAttemptsRemaining.values()
-              .toArray(new InputAttemptIdentifier[srcAttemptsRemaining.size()]);
+          return remaining
+              .toArray(new InputAttemptIdentifier[remaining.size()]);
         } else {
           return new InputAttemptIdentifier[] { srcAttemptId };
         }
@@ -941,8 +889,7 @@ public class Fetcher extends CallableWithNdc<FetchResult> {
     }
 
     // Sanity check
-    // we are guaranteed that key is not null
-    if (srcAttemptsRemaining.get(srcAttemptId.toString()) == null) {
+    if (!remaining.contains(srcAttemptId)) {
       // wrongMapErrs.increment(1);
       LOG.warn("Invalid input. Received output for headerPathComponent: "
           + pathComponent + "nextRemainingSrcAttemptId: "
@@ -953,8 +900,8 @@ public class Fetcher extends CallableWithNdc<FetchResult> {
   }
   
   private InputAttemptIdentifier getNextRemainingAttempt() {
-    if (srcAttemptsRemaining.size() > 0) {
-      return srcAttemptsRemaining.values().iterator().next();
+    if (remaining.size() > 0) {
+      return remaining.iterator().next();
     } else {
       return null;
     }
@@ -969,22 +916,22 @@ public class Fetcher extends CallableWithNdc<FetchResult> {
 
     public FetcherBuilder(FetcherCallback fetcherCallback,
         HttpConnectionParams params, FetchedInputAllocator inputManager,
-        ApplicationId appId, int dagIdentifier,  JobTokenSecretManager jobTokenSecretMgr, String srcNameTrimmed,
+        ApplicationId appId, JobTokenSecretManager jobTokenSecretMgr, String srcNameTrimmed,
         Configuration conf, boolean localDiskFetchEnabled, String localHostname, int shufflePort,
         boolean asyncHttp) {
-      this.fetcher = new Fetcher(fetcherCallback, params, inputManager, appId, dagIdentifier,
+      this.fetcher = new Fetcher(fetcherCallback, params, inputManager, appId,
           jobTokenSecretMgr, srcNameTrimmed, conf, null, null, null, localDiskFetchEnabled,
           false, localHostname, shufflePort, asyncHttp);
     }
 
     public FetcherBuilder(FetcherCallback fetcherCallback,
         HttpConnectionParams params, FetchedInputAllocator inputManager,
-        ApplicationId appId, int dagIdentifier, JobTokenSecretManager jobTokenSecretMgr, String srcNameTrimmed,
+        ApplicationId appId, JobTokenSecretManager jobTokenSecretMgr, String srcNameTrimmed,
         Configuration conf, RawLocalFileSystem localFs,
         LocalDirAllocator localDirAllocator, Path lockPath,
         boolean localDiskFetchEnabled, boolean sharedFetchEnabled,
         String localHostname, int shufflePort, boolean asyncHttp) {
-      this.fetcher = new Fetcher(fetcherCallback, params, inputManager, appId, dagIdentifier,
+      this.fetcher = new Fetcher(fetcherCallback, params, inputManager, appId,
           jobTokenSecretMgr, srcNameTrimmed, conf, localFs, localDirAllocator,
           lockPath, localDiskFetchEnabled, sharedFetchEnabled, localHostname, shufflePort, asyncHttp);
     }

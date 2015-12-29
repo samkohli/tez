@@ -22,26 +22,15 @@ import org.apache.tez.dag.records.TaskAttemptTerminationCause;
 import org.apache.tez.dag.records.TezTaskAttemptID;
 
 public class TaskAttemptEventAttemptFailed extends TaskAttemptEvent 
-  implements DiagnosableEvent, TaskAttemptEventTerminationCauseEvent, RecoveryEvent {
+  implements DiagnosableEvent, TaskAttemptEventTerminationCauseEvent {
 
   private final String diagnostics;
   private final TaskAttemptTerminationCause errorCause;
-  private boolean isFromRecovery = false;
-
-  /* Accepted Types - FAILED, TIMED_OUT */
   public TaskAttemptEventAttemptFailed(TezTaskAttemptID id,
       TaskAttemptEventType type, String diagnostics, TaskAttemptTerminationCause errorCause) {
     super(id, type);
     this.diagnostics = diagnostics;
     this.errorCause = errorCause;
-  }
-
-  /* Accepted Types - FAILED, TIMED_OUT */
-  public TaskAttemptEventAttemptFailed(TezTaskAttemptID id,
-      TaskAttemptEventType type, String diagnostics, TaskAttemptTerminationCause errorCause,
-      boolean isFromRecovery) {
-    this(id, type, diagnostics, errorCause);
-    this.isFromRecovery = isFromRecovery;
   }
 
   @Override
@@ -54,8 +43,4 @@ public class TaskAttemptEventAttemptFailed extends TaskAttemptEvent
     return errorCause;
   }
 
-  @Override
-  public boolean isFromRecovery() {
-    return isFromRecovery;
-  }
 }

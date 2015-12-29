@@ -26,38 +26,6 @@ App.DagVerticesController = App.TablePageController.extend({
 
   cacheDomain: Ember.computed.alias('controllers.dag.id'),
 
-  pollingType: 'vertexInfo',
-
-  pollsterControl: function () {
-
-    if(this.get('status') == 'RUNNING' &&
-        this.get('amWebServiceVersion') != '1' &&
-        !this.get('loading') &&
-        this.get('isActive') &&
-        this.get('pollingEnabled') &&
-        this. get('rowsDisplayed.length') > 0) {
-      this.get('pollster').start();
-    }
-    else {
-      this.get('pollster').stop();
-    }
-  }.observes('status', 'amWebServiceVersion', 'rowsDisplayed', 'loading', 'isActive', 'pollingEnabled'),
-
-  pollsterOptionsObserver: function () {
-    this.set('pollster.options', {
-      appID: this.get('applicationId'),
-      dagID: this.get('idx'),
-      counters: this.get('countersDisplayed'),
-      vertexID: this.get('rowsDisplayed').map(function (row) {
-          return App.Helpers.misc.getIndexFromId(row.get('id'));
-        }).join(',')
-    });
-  }.observes('applicationId', 'idx', 'rowsDisplayed'),
-
-  countersDisplayed: function () {
-    return App.Helpers.misc.getCounterQueryParam(this.get('columns'));
-  }.property('columns'),
-
   beforeLoad: function () {
     var dagController = this.get('controllers.dag'),
         model = dagController.get('model');
@@ -79,14 +47,12 @@ App.DagVerticesController = App.TablePageController.extend({
       });
     }
 
-    if (this.get('controllers.dag.amWebServiceVersion') == '1') {
-      this._loadProgress(data);
-    }
+    this._loadProgress(data);
 
     return this._super();
   },
 
-  // Load progress in parallel for v1 version of the api
+  // Load progress in parallel
   _loadProgress: function (vertices) {
     var that = this,
         runningVerticesIdx = vertices
@@ -104,17 +70,12 @@ App.DagVerticesController = App.TablePageController.extend({
           vertexIds: runningVerticesIdx.join(',')
         }
       }).then(function(vertexProgressInfo) {
-          App.Helpers.emData.mergeRecords(
-            that.get('rowsDisplayed'),
-            vertexProgressInfo,
-            ['progress']
-          );
+        vertexProgressInfo.forEach(function(item) {
+          var model = vertices.findBy('id', item.get('id')) || Em.Object.create();
+          model.set('progress', item.get('progress'));
+        });
       }).catch(function(error) {
-        error.message = "Failed to fetch vertexProgress. Application Master (AM) is out of reach. Either it's down, or CORS is not enabled for YARN ResourceManager.";
-        Em.Logger.error(error);
-        var err = App.Helpers.misc.formatError(error);
-        var msg = 'Error code: %@, message: %@'.fmt(err.errCode, err.msg);
-        App.Helpers.ErrorBar.getInstance().show(msg, err.details);
+        Em.Logger.debug("failed to fetch vertex progress")
       });
     }
   },
@@ -122,18 +83,11 @@ App.DagVerticesController = App.TablePageController.extend({
   defaultColumnConfigs: function() {
     function onProgressChange() {
       var progress = this.get('vertex.progress'),
-          pct,
-          status;
-      status = this.get('vertex.status');
-      if (Ember.typeOf(progress) === 'number' && status == 'RUNNING') {
+          pct;
+      if (Ember.typeOf(progress) === 'number') {
         pct = App.Helpers.number.fractionToPercentage(progress);
+        this.set('progress', pct);
       }
-      this.setProperties({
-        progress: pct,
-        status: status,
-        statusIcon: App.Helpers.misc.getStatusClassForEntity(status,
-          this.get('vertex.hasFailedTaskAttempts'))
-      });
     }
 
     return [
@@ -160,21 +114,20 @@ App.DagVerticesController = App.TablePageController.extend({
         headerCellName: 'Status',
         templateName: 'components/basic-table/status-cell',
         contentPath: 'status',
-        observePath: true,
         getCellContent: function(row) {
-          var status = row.get('status');
-          return {
-            status: status,
-            statusIcon: App.Helpers.misc.getStatusClassForEntity(status)
-          };
+          var status = row.get('status'),
+              content = Ember.Object.create({
+                vertex: row,
+                status: status,
+                statusIcon: App.Helpers.misc.getStatusClassForEntity(status,
+                  row.get('hasFailedTaskAttempts'))
+              });
+
+          if(status == 'RUNNING') {
+            row.addObserver('progress', content, onProgressChange);
+          }
+          return content;
         }
-      },
-      {
-        id: 'progress',
-        headerCellName: 'Progress',
-        contentPath: 'progress',
-        observePath: true,
-        templateName: 'components/basic-table/progress-cell'
       },
       {
         id: 'startTime',

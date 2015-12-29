@@ -407,8 +407,6 @@ public class OrderedGroupedKVInputConfig {
       }
       return this;
     }
-
-    @SuppressWarnings("unchecked")
     @Override
     public Builder setAdditionalConfiguration(String key, String value) {
       Preconditions.checkNotNull(key, "Key cannot be null");
@@ -425,7 +423,6 @@ public class OrderedGroupedKVInputConfig {
       return this;
     }
 
-    @SuppressWarnings("unchecked")
     @Override
     public Builder setAdditionalConfiguration(Map<String, String> confMap) {
       Preconditions.checkNotNull(confMap, "ConfMap cannot be null");
@@ -436,7 +433,6 @@ public class OrderedGroupedKVInputConfig {
       return this;
     }
 
-    @SuppressWarnings("unchecked")
     @Override
     public Builder setFromConfiguration(Configuration conf) {
       // Maybe ensure this is the first call ? Otherwise this can end up overriding other parameters

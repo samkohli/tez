@@ -36,19 +36,19 @@ public class TaskAttemptStartedEvent implements HistoryEvent {
   private String inProgressLogsUrl;
   private String completedLogsUrl;
   private String vertexName;
-  private long launchTime;
+  private long startTime;
   private ContainerId containerId;
   private NodeId nodeId;
   private String nodeHttpAddress;
 
   public TaskAttemptStartedEvent(TezTaskAttemptID taId,
-      String vertexName, long launchTime,
+      String vertexName, long startTime,
       ContainerId containerId, NodeId nodeId,
       String inProgressLogsUrl, String completedLogsUrl,
       String nodeHttpAddress) {
     this.taskAttemptId = taId;
     this.vertexName = vertexName;
-    this.launchTime = launchTime;
+    this.startTime = startTime;
     this.containerId = containerId;
     this.nodeId = nodeId;
     this.inProgressLogsUrl = inProgressLogsUrl;
@@ -75,17 +75,17 @@ public class TaskAttemptStartedEvent implements HistoryEvent {
   }
 
   public TaskAttemptStartedProto toProto() {
-    TaskAttemptStartedProto.Builder builder = TaskAttemptStartedProto.newBuilder();
-    builder.setTaskAttemptId(taskAttemptId.toString())
-        .setStartTime(launchTime)
+    return TaskAttemptStartedProto.newBuilder()
+        .setTaskAttemptId(taskAttemptId.toString())
+        .setStartTime(startTime)
         .setContainerId(containerId.toString())
-        .setNodeId(nodeId.toString());
-    return builder.build();
+        .setNodeId(nodeId.toString())
+        .build();
   }
 
   public void fromProto(TaskAttemptStartedProto proto) {
     this.taskAttemptId = TezTaskAttemptID.fromString(proto.getTaskAttemptId());
-    this.launchTime = proto.getStartTime();
+    this.startTime = proto.getStartTime();
     this.containerId = ConverterUtils.toContainerId(proto.getContainerId());
     this.nodeId = ConverterUtils.toNodeId(proto.getNodeId());
   }
@@ -108,9 +108,11 @@ public class TaskAttemptStartedEvent implements HistoryEvent {
   public String toString() {
     return "vertexName=" + vertexName
         + ", taskAttemptId=" + taskAttemptId
-        + ", startTime=" + launchTime
+        + ", startTime=" + startTime
         + ", containerId=" + containerId
-        + ", nodeId=" + nodeId;
+        + ", nodeId=" + nodeId
+        + ", inProgressLogs=" + inProgressLogsUrl
+        + ", completedLogs=" + completedLogsUrl;
   }
 
   public TezTaskAttemptID getTaskAttemptID() {
@@ -118,9 +120,9 @@ public class TaskAttemptStartedEvent implements HistoryEvent {
   }
 
   public long getStartTime() {
-    return launchTime;
+    return startTime;
   }
-  
+
   public ContainerId getContainerId() {
     return containerId;
   }

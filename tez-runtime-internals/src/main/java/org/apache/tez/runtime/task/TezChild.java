@@ -49,6 +49,7 @@ import org.apache.hadoop.security.token.Token;
 import org.apache.hadoop.yarn.YarnUncaughtExceptionHandler;
 import org.apache.hadoop.yarn.api.ApplicationConstants;
 import org.apache.hadoop.yarn.api.ApplicationConstants.Environment;
+import org.apache.log4j.LogManager;
 import org.apache.tez.common.ContainerContext;
 import org.apache.tez.common.ContainerTask;
 import org.apache.tez.common.TezCommonUtils;
@@ -61,17 +62,12 @@ import org.apache.tez.common.security.TokenCache;
 import org.apache.tez.dag.api.TezConfiguration;
 import org.apache.tez.dag.api.TezConstants;
 import org.apache.tez.dag.api.TezException;
-import org.apache.tez.dag.api.records.DAGProtos;
 import org.apache.tez.dag.records.TezVertexID;
 import org.apache.tez.dag.utils.RelocalizationUtils;
-import org.apache.tez.hadoop.shim.HadoopShim;
-import org.apache.tez.hadoop.shim.HadoopShimProvider;
-import org.apache.tez.hadoop.shim.HadoopShimsLoader;
 import org.apache.tez.runtime.api.ExecutionContext;
 import org.apache.tez.runtime.api.impl.ExecutionContextImpl;
 import org.apache.tez.runtime.api.impl.TaskSpec;
 import org.apache.tez.runtime.common.objectregistry.ObjectRegistryImpl;
-import org.apache.tez.runtime.internals.api.TaskReporterInterface;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -100,6 +96,7 @@ public class TezChild {
   private final int amHeartbeatInterval;
   private final long sendCounterInterval;
   private final int maxEventsToGet;
+  private final boolean isLocal;
   private final String workingDir;
 
   private final ListeningExecutorService executor;
@@ -112,24 +109,21 @@ public class TezChild {
   private final long memAvailable;
   private final AtomicBoolean isShutdown = new AtomicBoolean(false);
   private final String user;
-  private final boolean updateSysCounters;
 
   private Multimap<String, String> startedInputsMap = HashMultimap.create();
-  private final boolean ownUmbilical;
 
-  private final TezTaskUmbilicalProtocol umbilical;
-  private TaskReporterInterface taskReporter;
+  private TaskReporter taskReporter;
+  private TezTaskUmbilicalProtocol umbilical;
   private int taskCount = 0;
   private TezVertexID lastVertexID;
-  private final HadoopShim hadoopShim;
 
   public TezChild(Configuration conf, String host, int port, String containerIdentifier,
       String tokenIdentifier, int appAttemptNumber, String workingDir, String[] localDirs,
       Map<String, String> serviceProviderEnvMap,
       ObjectRegistryImpl objectRegistry, String pid,
       ExecutionContext executionContext,
-      Credentials credentials, long memAvailable, String user, TezTaskUmbilicalProtocol umbilical,
-      boolean updateSysCounters, HadoopShim hadoopShim) throws IOException, InterruptedException {
+      Credentials credentials, long memAvailable, String user)
+      throws IOException, InterruptedException {
     this.defaultConf = conf;
     this.containerIdString = containerIdentifier;
     this.appAttemptNumber = appAttemptNumber;
@@ -141,8 +135,6 @@ public class TezChild {
     this.credentials = credentials;
     this.memAvailable = memAvailable;
     this.user = user;
-    this.updateSysCounters = updateSysCounters;
-    this.hadoopShim = hadoopShim;
 
     getTaskMaxSleepTime = defaultConf.getInt(
         TezConfiguration.TEZ_TASK_GET_TASK_SLEEP_INTERVAL_MS_MAX,
@@ -172,27 +164,25 @@ public class TezChild {
       }
     }
 
+    this.isLocal = defaultConf.getBoolean(TezConfiguration.TEZ_LOCAL_MODE,
+        TezConfiguration.TEZ_LOCAL_MODE_DEFAULT);
     UserGroupInformation taskOwner = UserGroupInformation.createRemoteUser(tokenIdentifier);
     Token<JobTokenIdentifier> jobToken = TokenCache.getSessionToken(credentials);
 
     serviceConsumerMetadata.put(TezConstants.TEZ_SHUFFLE_HANDLER_SERVICE_ID,
         TezCommonUtils.convertJobTokenToBytes(jobToken));
 
-    if (umbilical == null) {
+    if (!isLocal) {
       final InetSocketAddress address = NetUtils.createSocketAddrForHost(host, port);
       SecurityUtil.setTokenService(jobToken, address);
       taskOwner.addToken(jobToken);
-      this.umbilical = taskOwner.doAs(new PrivilegedExceptionAction<TezTaskUmbilicalProtocol>() {
+      umbilical = taskOwner.doAs(new PrivilegedExceptionAction<TezTaskUmbilicalProtocol>() {
         @Override
         public TezTaskUmbilicalProtocol run() throws Exception {
           return RPC.getProxy(TezTaskUmbilicalProtocol.class,
               TezTaskUmbilicalProtocol.versionID, address, defaultConf);
         }
       });
-      ownUmbilical = true;
-    } else {
-      this.umbilical = umbilical;
-      ownUmbilical = false;
     }
   }
   
@@ -244,39 +234,35 @@ public class TezChild {
             containerTask.getTaskSpec().getTaskAttemptID().toString());
         System.out.println(timeStamp + " Starting to run new task attempt: " +
             containerTask.getTaskSpec().getTaskAttemptID().toString());
-        TezUtilsInternal.setHadoopCallerContext(hadoopShim,
-            containerTask.getTaskSpec().getTaskAttemptID());
         TezUtilsInternal.updateLoggers(loggerAddend);
         FileSystem.clearStatistics();
 
         childUGI = handleNewTaskCredentials(containerTask, childUGI);
-        handleNewTaskLocalResources(containerTask, childUGI);
+        handleNewTaskLocalResources(containerTask);
         cleanupOnTaskChanged(containerTask);
 
         // Execute the Actual Task
-        TezTaskRunner2 taskRunner = new TezTaskRunner2(defaultConf, childUGI,
+        TezTaskRunner taskRunner = new TezTaskRunner(defaultConf, childUGI,
             localDirs, containerTask.getTaskSpec(), appAttemptNumber,
             serviceConsumerMetadata, serviceProviderEnvMap, startedInputsMap, taskReporter,
-            executor, objectRegistry, pid, executionContext, memAvailable, updateSysCounters,
-            hadoopShim);
+            executor, objectRegistry, pid, executionContext, memAvailable);
         boolean shouldDie;
         try {
-          TaskRunner2Result result = taskRunner.run();
-          LOG.info("TaskRunner2Result: {}", result);
-          shouldDie = result.isContainerShutdownRequested();
+          shouldDie = !taskRunner.run();
           if (shouldDie) {
             LOG.info("Got a shouldDie notification via heartbeats for container {}. Shutting down", containerIdString);
             shutdown();
             return new ContainerExecutionResult(ContainerExecutionResult.ExitStatus.SUCCESS, null,
                 "Asked to die by the AM");
           }
-          if (result.getError() != null) {
-            Throwable e = result.getError();
-            handleError(result.getError());
-            return new ContainerExecutionResult(
-                ContainerExecutionResult.ExitStatus.EXECUTION_FAILURE,
-                e, "TaskExecutionFailure: " + e.getMessage());
-          }
+        } catch (IOException e) {
+          handleError(e);
+          return new ContainerExecutionResult(ContainerExecutionResult.ExitStatus.EXECUTION_FAILURE,
+              e, "TaskExecutionFailure: " + e.getMessage());
+        } catch (TezException e) {
+          handleError(e);
+          return new ContainerExecutionResult(ContainerExecutionResult.ExitStatus.EXECUTION_FAILURE,
+              e, "TaskExecutionFailure: " + e.getMessage());
         } finally {
           FileSystem.closeAllForUGI(childUGI);
         }
@@ -301,10 +287,10 @@ public class TezChild {
     Preconditions.checkState(!containerTask.shouldDie());
     Preconditions.checkState(containerTask.getTaskSpec() != null);
     if (containerTask.haveCredentialsChanged()) {
+      LOG.info("Refreshing UGI since Credentials have changed");
       Credentials taskCreds = containerTask.getCredentials();
       if (taskCreds != null) {
-        LOG.info("Refreshing UGI since Credentials have changed. Credentials : #Tokens=" +
-            taskCreds.numberOfTokens() + ", #SecretKeys="
+        LOG.info("Credentials : #Tokens=" + taskCreds.numberOfTokens() + ", #SecretKeys="
             + taskCreds.numberOfSecretKeys());
         childUGI = UserGroupInformation.createRemoteUser(user);
         childUGI.addCredentials(containerTask.getCredentials());
@@ -322,35 +308,27 @@ public class TezChild {
    * @throws IOException
    * @throws TezException
    */
-  private void handleNewTaskLocalResources(ContainerTask containerTask,
-      UserGroupInformation ugi) throws IOException, TezException {
-
-    final Map<String, TezLocalResource> additionalResources = containerTask.getAdditionalResources();
+  private void handleNewTaskLocalResources(ContainerTask containerTask) throws IOException,
+      TezException {
+    Map<String, TezLocalResource> additionalResources = containerTask.getAdditionalResources();
     if (LOG.isDebugEnabled()) {
       LOG.debug("Additional Resources added to container: " + additionalResources);
     }
 
-    if (additionalResources != null && !additionalResources.isEmpty()) {
-      LOG.info("Localizing additional local resources for Task : " + additionalResources);
-
-      try {
-        List<URL> downloadedUrls = ugi.doAs(new PrivilegedExceptionAction<List<URL>>() {
+    LOG.info("Localizing additional local resources for Task : " + additionalResources);
+    List<URL> downloadedUrls = RelocalizationUtils.processAdditionalResources(
+        Maps.transformValues(additionalResources, new Function<TezLocalResource, URI>() {
           @Override
-          public List<URL> run() throws Exception {
-            return RelocalizationUtils.processAdditionalResources(
-                Maps.transformValues(additionalResources, new Function<TezLocalResource, URI>() {
-                  @Override
-                  public URI apply(TezLocalResource input) {
-                    return input.getUri();
-                  }
-                }), defaultConf, workingDir);
+          public URI apply(TezLocalResource input) {
+            return input.getUri();
           }
-        });
-        RelocalizationUtils.addUrlsToClassPath(downloadedUrls);
-      } catch (InterruptedException e) {
-        throw new TezException(e);
-      }
-      LOG.info("Done localizing additional resources");
+        }), defaultConf, workingDir);
+    RelocalizationUtils.addUrlsToClassPath(downloadedUrls);
+
+    LOG.info("Done localizing additional resources");
+    final TaskSpec taskSpec = containerTask.getTaskSpec();
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("New container task context:" + taskSpec.toString());
     }
   }
 
@@ -390,9 +368,16 @@ public class TezChild {
       if (taskReporter != null) {
         taskReporter.shutdown();
       }
-      if (ownUmbilical) {
+      if (!isLocal) {
         RPC.stopProxy(umbilical);
+        LogManager.shutdown();
       }
+    }
+  }
+
+  public void setUmbilical(TezTaskUmbilicalProtocol tezTaskUmbilicalProtocol){
+    if(tezTaskUmbilicalProtocol != null){
+      this.umbilical = tezTaskUmbilicalProtocol;
     }
   }
 
@@ -418,7 +403,7 @@ public class TezChild {
     private final Throwable throwable;
     private final String errorMessage;
 
-    public ContainerExecutionResult(ExitStatus exitStatus, @Nullable Throwable throwable,
+    ContainerExecutionResult(ExitStatus exitStatus, @Nullable Throwable throwable,
                              @Nullable String errorMessage) {
       this.exitStatus = exitStatus;
       this.throwable = throwable;
@@ -450,8 +435,7 @@ public class TezChild {
   public static TezChild newTezChild(Configuration conf, String host, int port, String containerIdentifier,
       String tokenIdentifier, int attemptNumber, String[] localDirs, String workingDirectory,
       Map<String, String> serviceProviderEnvMap, @Nullable String pid,
-      ExecutionContext executionContext, Credentials credentials, long memAvailable, String user,
-      TezTaskUmbilicalProtocol tezUmbilical, boolean updateSysCounters, HadoopShim hadoopShim)
+      ExecutionContext executionContext, Credentials credentials, long memAvailable, String user)
       throws IOException, InterruptedException, TezException {
 
     // Pull in configuration specified for the session.
@@ -464,8 +448,7 @@ public class TezChild {
 
     return new TezChild(conf, host, port, containerIdentifier, tokenIdentifier,
         attemptNumber, workingDirectory, localDirs, serviceProviderEnvMap, objectRegistry, pid,
-        executionContext, credentials, memAvailable, user, tezUmbilical, updateSysCounters,
-        hadoopShim);
+        executionContext, credentials, memAvailable, user);
   }
 
   public static void main(String[] args) throws IOException, InterruptedException, TezException {
@@ -473,8 +456,7 @@ public class TezChild {
     final Configuration defaultConf = new Configuration();
 
     Thread.setDefaultUncaughtExceptionHandler(new YarnUncaughtExceptionHandler());
-    final String pid = System.getenv().get("JVM_PID");
-
+    LOG.info("TezChild starting");
 
     assert args.length == 5;
     String host = args[0];
@@ -484,7 +466,8 @@ public class TezChild {
     final int attemptNumber = Integer.parseInt(args[4]);
     final String[] localDirs = TezCommonUtils.getTrimmedStrings(System.getenv(Environment.LOCAL_DIRS
         .name()));
-    LOG.info("TezChild starting with PID=" + pid + ", containerIdentifier=" + containerIdentifier);
+    final String pid = System.getenv().get("JVM_PID");
+    LOG.info("PID, containerIdentifier:  " + pid + ", " + containerIdentifier);
     if (LOG.isDebugEnabled()) {
       LOG.debug("Info from cmd line: AM-host: " + host + " AM-port: " + port
           + " containerIdentifier: " + containerIdentifier + " appAttemptNumber: " + attemptNumber
@@ -492,19 +475,14 @@ public class TezChild {
     }
 
     // Security framework already loaded the tokens into current ugi
-    DAGProtos.ConfigurationProto confProto =
-        TezUtilsInternal.readUserSpecifiedTezConfiguration(System.getenv(Environment.PWD.name()));
-    TezUtilsInternal.addUserSpecifiedTezConfiguration(defaultConf, confProto.getConfKeyValuesList());
+    TezUtilsInternal.addUserSpecifiedTezConfiguration(System.getenv(Environment.PWD.name()), defaultConf);
     UserGroupInformation.setConfiguration(defaultConf);
     Credentials credentials = UserGroupInformation.getCurrentUser().getCredentials();
-
-    HadoopShim hadoopShim = new HadoopShimsLoader(defaultConf).getHadoopShim();
-
     TezChild tezChild = newTezChild(defaultConf, host, port, containerIdentifier,
         tokenIdentifier, attemptNumber, localDirs, System.getenv(Environment.PWD.name()),
         System.getenv(), pid, new ExecutionContextImpl(System.getenv(Environment.NM_HOST.name())),
         credentials, Runtime.getRuntime().maxMemory(), System
-            .getenv(ApplicationConstants.Environment.USER.toString()), null, true, hadoopShim);
+            .getenv(ApplicationConstants.Environment.USER.toString()));
     tezChild.run();
   }
 

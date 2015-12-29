@@ -108,11 +108,8 @@ public class MultiMRInput extends MRInputBase {
   @Override
   public List<Event> initialize() throws IOException {
     super.initialize();
-    LOG.info(getContext().getSourceVertexName() + " using newmapreduce API=" + useNewApi +
-        ", numPhysicalInputs=" + getNumPhysicalInputs());
-    if (getNumPhysicalInputs() == 0) {
-      getContext().inputIsReady();
-    }
+    LOG.info("Using New mapreduce API: " + useNewApi + ", numPhysicalInputs: "
+        + getNumPhysicalInputs());
     return null;
   }
 
@@ -143,10 +140,6 @@ public class MultiMRInput extends MRInputBase {
   public void handleEvents(List<Event> inputEvents) throws Exception {
     lock.lock();
     try {
-      if (getNumPhysicalInputs() == 0) {
-        throw new IllegalStateException(
-            "Unexpected event. MultiMRInput has been setup to receive 0 events");
-      }
       Preconditions.checkState(eventCount.get() + inputEvents.size() <= getNumPhysicalInputs(),
           "Unexpected event. All physical sources already initialized");
       for (Event event : inputEvents) {
@@ -164,9 +157,7 @@ public class MultiMRInput extends MRInputBase {
 
   private MRReader initFromEvent(InputDataInformationEvent event) throws IOException {
     Preconditions.checkState(event != null, "Event must be specified");
-    if (LOG.isDebugEnabled()) {
-      LOG.debug(getContext().getSourceVertexName() + " initializing Reader: " + eventCount.get());
-    }
+    LOG.info("Initializing Reader: " + eventCount.get());
     MRSplitProto splitProto = MRSplitProto.parseFrom(ByteString.copyFrom(event.getUserPayload()));
     Object split = null;
     MRReader reader = null;
@@ -177,22 +168,18 @@ public class MultiMRInput extends MRInputBase {
           getContext().getCounters(), inputRecordCounter, getContext().getApplicationId()
           .getClusterTimestamp(), getContext().getTaskVertexIndex(), getContext()
           .getApplicationId().getId(), getContext().getTaskIndex(), getContext()
-          .getTaskAttemptNumber(), getContext());
-      if (LOG.isDebugEnabled()) {
-        LOG.debug(getContext().getSourceVertexName() + " split Details -> SplitClass: " +
-            split.getClass().getName() + ", NewSplit: " + split);
-      }
+          .getTaskAttemptNumber());
+      LOG.info("Split Details -> SplitClass: " + split.getClass().getName() + ", NewSplit: "
+          + split);
 
     } else {
       split = MRInputUtils.getOldSplitDetailsFromEvent(splitProto, localJobConf);
       reader = new MRReaderMapred(localJobConf, (org.apache.hadoop.mapred.InputSplit) split,
-          getContext().getCounters(), inputRecordCounter, getContext());
-      if (LOG.isDebugEnabled()) {
-        LOG.debug(getContext().getSourceVertexName() + " split Details -> SplitClass: " +
-            split.getClass().getName() + ", OldSplit: " + split);
-      }
+          getContext().getCounters(), inputRecordCounter);
+      LOG.info("Split Details -> SplitClass: " + split.getClass().getName() + ", OldSplit: "
+          + split);
     }
-    LOG.info(getContext().getSourceVertexName() + " initialized RecordReader from event");
+    LOG.info("Initialized RecordReader from event");
     return reader;
   }
 
@@ -210,6 +197,6 @@ public class MultiMRInput extends MRInputBase {
 
   @Override
   public void start() throws Exception {
-    Preconditions.checkState(getNumPhysicalInputs() >= 0, "Expecting zero or more physical inputs");
+    Preconditions.checkState(getNumPhysicalInputs() >= 1, "Expecting one or more physical inputs");
   }
 }

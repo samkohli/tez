@@ -47,8 +47,6 @@ App.Helpers.misc = {
         return 'success';
       case 'UNDEFINED':
         return 'unknown';
-      case 'SCHEDULED':
-        return 'schedule';
       default:
         return 'submitted';
     }
@@ -160,7 +158,7 @@ App.Helpers.misc = {
    * @param counterConfigs Array
    * @return Normalized configurations
    */
-  normalizeCounterConfigs: function (counterConfigs, controller) {
+  normalizeCounterConfigs: function (counterConfigs) {
     return counterConfigs.map(function (configuration) {
       var groupName = configuration.counterGroupName || configuration.groupId,
           counterName = configuration.counterName || configuration.counterId;
@@ -171,85 +169,11 @@ App.Helpers.misc = {
       );
       configuration.id = '%@/%@'.fmt(groupName, counterName),
 
-      configuration.observePath = true;
-      configuration.contentPath = 'counterGroups';
-      configuration.counterGroupName = groupName;
-      configuration.counterName = counterName;
-
-      if(controller) {
-        configuration.onSort = controller.onInProgressColumnSort.bind(controller);
-      }
-
       configuration.getSortValue = App.Helpers.misc.getCounterCellContent;
       configuration.getCellContent =
           configuration.getSearchValue = App.Helpers.misc.getCounterCellContentFormatted;
       return configuration;
     });
-  },
-
-  getCounterQueryParam: function (columns) {
-    var counterHash = {},
-        counters = [];
-
-    columns.forEach(function (column) {
-      var groupName = column.get('counterGroupName'),
-          counterName = column.get('counterName');
-      if(column.get('contentPath') == 'counterGroups') {
-        counterHash[groupName] = counterHash[groupName] || [];
-        counterHash[groupName].push(counterName);
-      }
-    });
-    for(var groupName in counterHash) {
-      counters.push('%@/%@'.fmt(groupName, counterHash[groupName].join(',')));
-    }
-
-    return counters.join(';');
-  },
-
-  /*
-   * Merges counter information from AM counter object into ATS counters array
-   */
-  mergeCounterInfo: function (targetATSCounters, sourceAMCounters) {
-    var atsCounters, atsCounter,
-        counters;
-
-    targetATSCounters = targetATSCounters || [];
-
-    try{
-      for(var counterGroupName in sourceAMCounters) {
-        counters = sourceAMCounters[counterGroupName],
-        atsCounters = targetATSCounters.findBy('counterGroupName', counterGroupName);
-        if(!atsCounters) {
-          atsCounters = [];
-          targetATSCounters.pushObject({
-            counterGroupName: counterGroupName,
-            counterGroupDisplayName: counterGroupName,
-            counters: atsCounters
-          });
-        }
-        else {
-          atsCounters = atsCounters.counters;
-        }
-        for(var counterName in counters) {
-          atsCounter = atsCounters.findBy('counterName', counterName);
-          if(atsCounter) {
-            Em.set(atsCounter, 'counterValue', counters[counterName]);
-          }
-          else {
-            atsCounters.pushObject({
-              "counterName": counterName,
-              "counterDisplayName": counterName,
-              "counterValue": counters[counterName]
-            });
-          }
-        }
-      }
-    }
-    catch(e){
-      Em.Logger.info("Counter merge failed", e);
-    }
-
-    return targetATSCounters;
   },
 
   /*
@@ -302,11 +226,6 @@ App.Helpers.misc = {
    * @return value
    */
   getCounterCellContentFormatted: function (row) {
-    if(row.get(this.get('contentPath')) == undefined) {
-      return {
-        isPending: true
-      };
-    }
     var value = App.Helpers.misc.getCounterCellContent.call(this, row);
     return App.Helpers.number.formatNumThousands(value);
   },
@@ -320,7 +239,7 @@ App.Helpers.misc = {
     // for cross domain requests, the error is not set if no access control headers were found.
     // this could be either because there was a n/w error or the cors headers being not set.
     if (error.status === 0 && error.statusText === 'error') {
-      msg = defaultErrorMessage || error.message;
+      msg = defaultErrorMessage ;
     } else {
       msg = error.statusText || error.message;
     }
@@ -433,30 +352,12 @@ App.Helpers.misc = {
     return appId;
   },  
 
-  /* Gets the dag index from the dag id
-   * @param dagId {String}
-   * @return dag index for the given dagId {String}
-   */
-  getDagIndexFromDagId: function(dagId) {
-    return dagId.split('_').splice(-1).pop();
-  },
-
-  /*
-   * Return index for the given id
-   * @param id {string}
-   * @return index {Number}
-   */
-  getIndexFromId: function (id) {
-    return parseInt(id.split('_').splice(-1).pop());
-  },
-
   /**
    * Remove the specific record from store
    * @param store {DS.Store}
    * @param type {String}
    * @param id {String}
    */
-  //TODO: TEZ-2876 Extend store to have a loadRecord function that skips the cache
   removeRecord: function (store, type, id) {
     var record = store.getById(type, id);
     if(record) {
@@ -794,26 +695,6 @@ App.Helpers.misc = {
   defaultQueryParamsConfig: {
     refreshModel: true,
     replace: true
-  },
-
-  /**
-   * Load app details form RM if available, else load from ATS if AHS is enabled
-   * @param store {Store}
-   * @param appId {String}
-   * @param useCache {Boolean}
-   */
-  loadApp: function (store, appId, useCache) {
-    if(!useCache) {
-      App.Helpers.misc.removeRecord(store, 'appDetail', appId);
-      App.Helpers.misc.removeRecord(store, 'clusterApp', appId);
-    }
-
-    return store.find('clusterApp', appId).catch(function () {
-      return store.find('appDetail', appId);
-    }).catch(function (error) {
-      error.message = "Couldn't get details of application %@. RM is not reachable, and history service is not enabled.".fmt(appId);
-      throw error;
-    });
   }
 
 }

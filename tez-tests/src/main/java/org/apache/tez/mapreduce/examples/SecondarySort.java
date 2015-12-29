@@ -209,8 +209,7 @@ public class SecondarySort extends Configured implements Tool {
       }
     }
   }
-
-  @SuppressWarnings("deprecation")
+  
   @Override
   public int run(String[] args) throws Exception {
     Configuration conf = getConf();

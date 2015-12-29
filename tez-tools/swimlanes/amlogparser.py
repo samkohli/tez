@@ -72,16 +72,6 @@ class AppMaster(object):
 		self.dags = None
 	def __repr__(self):
 		return "[%s started at %d]" % (self.name, self.zero)
-
-class DummyAppMaster(object):
-	""" magic of duck typing """
-	def __init__(self, dag):
-		self.raw = None
-		self.kvs = {}
-		self.name = "Appmaster for %s" % dag.name
-		self.zero = dag.start
-		self.containers = None
-		self.dags = None
 	
 class Container(object):
 	def __init__(self, raw):
@@ -94,17 +84,6 @@ class Container(object):
 		self.node =""
 	def __repr__(self):
 		return "[%s start=%d]" % (self.name, self.start)
-
-class DummyContainer(object):
-	def __init__(self, attempt):
-		self.raw = None
-		self.kvs = {}
-		self.name = attempt.container
-		self.status = 0
-		self.start = attempt.start
-		self.stop = -1
-		self.status = 0
-		self.node = None
 
 class DAG(object):
 	def __init__(self, raw):
@@ -221,14 +200,8 @@ class AMLog(object):
 		for d in dags:
 			d.structure(vertexes)
 		for a in attempts:
-			if containers.has_key(a.container):
-				c = containers[a.container]
-				c.node = a.node
-			else:
-				c = DummyContainer(a)
-				containers[a.container] = c
-		if not am:
-			am = DummyAppMaster(first(dags))
+			c = containers[a.container]
+			c.node = a.node
 		am.containers = containers
 		am.dags = dags
 		return am
@@ -272,6 +245,7 @@ class AMLog(object):
 	def parse(self, l):		
 		if(l.find("[HISTORY]") != -1):
 			m = self.MAIN_RE.match(l)
+			print(m);
 			ts = m.group("ts")
 			dag = m.group("dag")
 			event = m.group("event")

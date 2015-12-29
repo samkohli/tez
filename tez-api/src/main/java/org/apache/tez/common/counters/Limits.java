@@ -18,7 +18,6 @@
 
 package org.apache.tez.common.counters;
 
-import com.google.common.annotations.VisibleForTesting;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.hadoop.classification.InterfaceAudience;
@@ -42,7 +41,7 @@ public class Limits {
       return;
     }
     if (conf == null) {
-      conf = new TezConfiguration();
+      conf = new Configuration();
     }
     GROUP_NAME_MAX =
         conf.getInt(TezConfiguration.TEZ_COUNTERS_GROUP_NAME_MAX_LENGTH,
@@ -115,13 +114,6 @@ public class Limits {
     if (Limits.conf == null && conf != null) {
       Limits.conf = conf;
     }
-  }
-
-  @VisibleForTesting
-  @InterfaceAudience.Private
-  public synchronized static void reset() {
-    conf = null;
-    initialized = false;
   }
 
 }

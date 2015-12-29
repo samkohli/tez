@@ -39,9 +39,6 @@ import java.util.Map.Entry;
 
 import com.google.common.base.Strings;
 import org.apache.commons.lang.StringUtils;
-import org.apache.tez.common.JavaOptsChecker;
-import org.apache.tez.dag.api.records.DAGProtos.AMPluginDescriptorProto;
-import org.apache.tez.serviceplugins.api.ServicePluginsDescriptor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.hadoop.classification.InterfaceAudience.Private;
@@ -71,7 +68,6 @@ import org.apache.hadoop.yarn.api.records.ContainerLaunchContext;
 import org.apache.hadoop.yarn.api.records.LocalResource;
 import org.apache.hadoop.yarn.api.records.LocalResourceType;
 import org.apache.hadoop.yarn.api.records.LocalResourceVisibility;
-import org.apache.hadoop.yarn.api.records.Priority;
 import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.api.records.YarnApplicationState;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
@@ -133,11 +129,11 @@ public class TezClientUtils {
     Path p = new Path(uri);
     FileSystem fs = p.getFileSystem(conf);
     p = fs.resolvePath(p);
-    FileSystem targetFS = p.getFileSystem(conf); 
-    if (targetFS.isDirectory(p)) {
-      return targetFS.listStatus(p);
+
+    if (fs.isDirectory(p)) {
+      return fs.listStatus(p);
     } else {
-      FileStatus fStatus = targetFS.getFileStatus(p);
+      FileStatus fStatus = fs.getFileStatus(p);
       return new FileStatus[]{fStatus};
     }
   }
@@ -408,7 +404,6 @@ public class TezClientUtils {
    * @param tezJarResources Resources to be used by the AM
    * @param sessionCreds the credential object which will be populated with session specific
    * @param historyACLPolicyManager
-   * @param servicePluginsDescriptor descriptor for services which may be running in the AM
    * @return an ApplicationSubmissionContext to launch a Tez AM
    * @throws IOException
    * @throws YarnException
@@ -419,8 +414,7 @@ public class TezClientUtils {
       ApplicationId appId, DAG dag, String amName,
       AMConfiguration amConfig, Map<String, LocalResource> tezJarResources,
       Credentials sessionCreds, boolean tezLrsAsArchive,
-      TezApiVersionInfo apiVersionInfo, HistoryACLPolicyManager historyACLPolicyManager,
-      ServicePluginsDescriptor servicePluginsDescriptor, JavaOptsChecker javaOptsChecker)
+      TezApiVersionInfo apiVersionInfo, HistoryACLPolicyManager historyACLPolicyManager)
       throws IOException, YarnException {
 
     Preconditions.checkNotNull(sessionCreds);
@@ -508,13 +502,9 @@ public class TezClientUtils {
     }
 
     Map<String, String> environment = new TreeMap<String, String>();
-    TezYARNUtils.setupDefaultEnv(environment, conf,
-        TezConfiguration.TEZ_AM_LAUNCH_ENV,
-        TezConfiguration.TEZ_AM_LAUNCH_ENV_DEFAULT,
-        TezConfiguration.TEZ_AM_LAUNCH_CLUSTER_DEFAULT_ENV,
-        TezConfiguration.TEZ_AM_LAUNCH_CLUSTER_DEFAULT_ENV_DEFAULT,
-        tezLrsAsArchive);
-
+    TezYARNUtils.setupDefaultEnv(environment, conf, TezConfiguration.TEZ_AM_LAUNCH_ENV,
+        TezConfiguration.TEZ_AM_LAUNCH_ENV_DEFAULT, tezLrsAsArchive);
+    
     addVersionInfoToEnv(environment, apiVersionInfo);
     addLogParamsToEnv(environment, amLogParams);
 
@@ -560,7 +550,7 @@ public class TezClientUtils {
 
     // emit conf as PB file
     ConfigurationProto finalConfProto = createFinalConfProtoForApp(amConfig.getTezConfiguration(),
-        aclConfigs, servicePluginsDescriptor);
+        aclConfigs);
     
     FSDataOutputStream amConfPBOutBinaryStream = null;
     try {
@@ -614,7 +604,7 @@ public class TezClientUtils {
     if(dag != null) {
       
       DAGPlan dagPB = prepareAndCreateDAGPlan(dag, amConfig, tezJarResources, tezLrsAsArchive,
-          sessionCreds, servicePluginsDescriptor, javaOptsChecker);
+          sessionCreds);
 
       // emit protobuf DAG file style
       Path binaryPath = TezCommonUtils.getTezBinPlanStagingPath(tezSysStagingPath);
@@ -672,8 +662,6 @@ public class TezClientUtils {
     if (amConfig.getQueueName() != null) {
       appContext.setQueue(amConfig.getQueueName());
     }
-    // set the application priority
-    setApplicationPriority(appContext, amConfig);
     appContext.setApplicationName(amName);
     appContext.setCancelTokensWhenComplete(amConfig.getTezConfiguration().getBoolean(
         TezConfiguration.TEZ_CANCEL_DELEGATION_TOKENS_ON_COMPLETION,
@@ -690,22 +678,18 @@ public class TezClientUtils {
   
   static DAGPlan prepareAndCreateDAGPlan(DAG dag, AMConfiguration amConfig,
       Map<String, LocalResource> tezJarResources, boolean tezLrsAsArchive,
-      Credentials credentials, ServicePluginsDescriptor servicePluginsDescriptor,
-      JavaOptsChecker javaOptsChecker) throws IOException {
+      Credentials credentials) throws IOException {
     return prepareAndCreateDAGPlan(dag, amConfig, tezJarResources, tezLrsAsArchive, credentials,
-        null, servicePluginsDescriptor, javaOptsChecker);
+        null);
   }
 
   static DAGPlan prepareAndCreateDAGPlan(DAG dag, AMConfiguration amConfig,
       Map<String, LocalResource> tezJarResources, boolean tezLrsAsArchive,
-      Credentials credentials, Map<String, String> additionalDAGConfigs,
-      ServicePluginsDescriptor servicePluginsDescriptor,
-      JavaOptsChecker javaOptsChecker) throws IOException {
+      Credentials credentials, Map<String, String> additionalDAGConfigs) throws IOException {
     Credentials dagCredentials = setupDAGCredentials(dag, credentials,
         amConfig.getTezConfiguration());
     return dag.createDag(amConfig.getTezConfiguration(), dagCredentials, tezJarResources,
-        amConfig.getBinaryConfLR(), tezLrsAsArchive, additionalDAGConfigs, servicePluginsDescriptor,
-        javaOptsChecker);
+        amConfig.getBinaryConfLR(), tezLrsAsArchive, additionalDAGConfigs);
   }
   
   static void maybeAddDefaultLoggingJavaOpts(String logLevel, List<String> vargs) {
@@ -734,39 +718,21 @@ public class TezClientUtils {
     }
     return StringUtils.join(vargs, " ").trim();
   }
-
+  
   @Private
-  public static String addDefaultsToTaskLaunchCmdOpts(String vOpts, Configuration conf)
-      throws TezException {
-    return addDefaultsToTaskLaunchCmdOpts(vOpts, conf, null);
-  }
-
-  @Private
-  public static String addDefaultsToTaskLaunchCmdOpts(String vOpts, Configuration conf,
-      JavaOptsChecker javaOptsChecker) throws TezException {
+  public static String addDefaultsToTaskLaunchCmdOpts(String vOpts, Configuration conf) {
     String vConfigOpts = "";
     String taskDefaultOpts = conf.get(TezConfiguration.TEZ_TASK_LAUNCH_CLUSTER_DEFAULT_CMD_OPTS,
         TezConfiguration.TEZ_TASK_LAUNCH_CLUSTER_DEFAULT_CMD_OPTS_DEFAULT);
     if (taskDefaultOpts != null && !taskDefaultOpts.isEmpty()) {
       vConfigOpts = taskDefaultOpts + " ";
     }
-    String defaultTaskCmdOpts = TezConfiguration.TEZ_TASK_LAUNCH_CMD_OPTS_DEFAULT;
-    if (vOpts != null && !vOpts.isEmpty()) {
-      // Only use defaults if nothing is specified by the user
-      defaultTaskCmdOpts = "";
-    }
-
     vConfigOpts = vConfigOpts + conf.get(TezConfiguration.TEZ_TASK_LAUNCH_CMD_OPTS,
-        defaultTaskCmdOpts);
+        TezConfiguration.TEZ_TASK_LAUNCH_CMD_OPTS_DEFAULT);
     if (vConfigOpts != null && !vConfigOpts.isEmpty()) {
       // Add options specified in the DAG at the end.
       vOpts = vConfigOpts + " " + vOpts;
     }
-
-    if (javaOptsChecker != null) {
-      javaOptsChecker.checkOpts(vOpts);
-    }
-
     return vOpts;
   }
 
@@ -783,8 +749,12 @@ public class TezClientUtils {
         + "," + TezConstants.TEZ_CONTAINER_LOGGER_NAME);
   }
 
+  static ConfigurationProto createFinalConfProtoForApp(Configuration amConf) {
+    return createFinalConfProtoForApp(amConf, null);
+  }
+
   static ConfigurationProto createFinalConfProtoForApp(Configuration amConf,
-    Map<String, String> additionalConfigs, ServicePluginsDescriptor servicePluginsDescriptor) {
+    Map<String, String> additionalConfigs) {
     assert amConf != null;
     ConfigurationProto.Builder builder = ConfigurationProto.newBuilder();
     for (Entry<String, String> entry : amConf) {
@@ -801,14 +771,8 @@ public class TezClientUtils {
         builder.addConfKeyValues(kvp);
       }
     }
-
-    AMPluginDescriptorProto pluginDescriptorProto =
-        DagTypeConverters.convertServicePluginDescriptorToProto(servicePluginsDescriptor);
-    builder.setAmPluginDescriptor(pluginDescriptorProto);
-
     return builder.build();
   }
-
 
 
   /**
@@ -1002,12 +966,9 @@ public class TezClientUtils {
   static String constructAMLaunchOpts(TezConfiguration tezConf, Resource capability) {
     String defaultOpts = tezConf.get(TezConfiguration.TEZ_AM_LAUNCH_CLUSTER_DEFAULT_CMD_OPTS,
         TezConfiguration.TEZ_AM_LAUNCH_CLUSTER_DEFAULT_CMD_OPTS_DEFAULT);
-    Path tmpDir = new Path(Environment.PWD.$(),
-        YarnConfiguration.DEFAULT_CONTAINER_TEMP_DIR);
-    String amOpts = "-Djava.io.tmpdir=" + tmpDir + " ";
-
+    String amOpts = "";
     if (defaultOpts != null && !defaultOpts.isEmpty()) {
-      amOpts = amOpts + defaultOpts + " ";
+      amOpts = defaultOpts + " ";
     }
     amOpts = amOpts + tezConf.get(TezConfiguration.TEZ_AM_LAUNCH_CMD_OPTS,
         TezConfiguration.TEZ_AM_LAUNCH_CMD_OPTS_DEFAULT);
@@ -1015,7 +976,6 @@ public class TezClientUtils {
     amOpts = maybeAddDefaultMemoryJavaOpts(amOpts, capability,
         tezConf.getDouble(TezConfiguration.TEZ_CONTAINER_MAX_JAVA_HEAP_FRACTION,
             TezConfiguration.TEZ_CONTAINER_MAX_JAVA_HEAP_FRACTION_DEFAULT));
-
     return amOpts;
   }
 
@@ -1048,23 +1008,4 @@ public class TezClientUtils {
       return null;
     }
   }
-
-  @VisibleForTesting
-  // this method will set the app priority only if the priority config has been defined
-  public static void setApplicationPriority(ApplicationSubmissionContext context,
-      AMConfiguration amConfig) {
-    if (amConfig.getTezConfiguration().get(TezConfiguration.TEZ_AM_APPLICATION_PRIORITY) != null) {
-      // since we already checked not null condition, we are guaranteed that default value
-      // (0 in this case for getInt) will not be returned/used.
-      // The idea is to not use any default priority from TEZ side, if none provided in config;
-      // let YARN determine the priority of the submitted application
-      int priority = amConfig.getTezConfiguration().getInt(TezConfiguration.TEZ_AM_APPLICATION_PRIORITY, 0);
-      context.setPriority(Priority.newInstance(priority));
-      if (LOG.isDebugEnabled()) {
-        LOG.debug("Settting TEZ application priority, applicationId= " + context.getApplicationId() +
-            ", priority= " + context.getPriority().getPriority());
-      }
-    }
-  }
-
 }

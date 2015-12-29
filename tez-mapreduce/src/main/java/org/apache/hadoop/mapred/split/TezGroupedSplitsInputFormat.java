@@ -31,8 +31,9 @@ import org.apache.hadoop.mapred.InputSplit;
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapred.RecordReader;
 import org.apache.hadoop.mapred.Reporter;
+import org.apache.hadoop.mapred.split.SplitSizeEstimator;
 import org.apache.tez.common.ReflectionUtils;
-import org.apache.tez.dag.api.TezException;
+import org.apache.tez.dag.api.TezUncheckedException;
 
 import com.google.common.base.Preconditions;
 
@@ -52,7 +53,6 @@ public class TezGroupedSplitsInputFormat<K, V>
   Configuration conf;
 
   SplitSizeEstimator estimator;
-  SplitLocationProvider locationProvider;
   
   public TezGroupedSplitsInputFormat() {
     
@@ -72,14 +72,6 @@ public class TezGroupedSplitsInputFormat<K, V>
       LOG.debug("Split size estimator : " + estimator);
     }
   }
-
-  public void setSplitLocationProvider(SplitLocationProvider locationProvider) {
-    Preconditions.checkArgument(locationProvider != null);
-    this.locationProvider = locationProvider;
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("Split size location provider: " + locationProvider);
-    }
-  }
   
   public void setDesiredNumberOfSplits(int num) {
     Preconditions.checkArgument(num >= 0);
@@ -94,37 +86,31 @@ public class TezGroupedSplitsInputFormat<K, V>
     InputSplit[] originalSplits = wrappedInputFormat.getSplits(job, numSplits);
     TezMapredSplitsGrouper grouper = new TezMapredSplitsGrouper();
     String wrappedInputFormatName = wrappedInputFormat.getClass().getName();
-    return grouper
-        .getGroupedSplits(conf, originalSplits, desiredNumSplits, wrappedInputFormatName, estimator,
-            locationProvider);
+    return grouper.getGroupedSplits(conf, originalSplits, desiredNumSplits, wrappedInputFormatName, estimator);
   }
   
   @Override
   public RecordReader<K, V> getRecordReader(InputSplit split, JobConf job,
       Reporter reporter) throws IOException {
     TezGroupedSplit groupedSplit = (TezGroupedSplit) split;
-    try {
-      initInputFormatFromSplit(groupedSplit);
-    } catch (TezException e) {
-      throw new IOException(e);
-    }
+    initInputFormatFromSplit(groupedSplit);
     return new TezGroupedSplitsRecordReader(groupedSplit, job, reporter);
   }
   
   @SuppressWarnings({ "unchecked", "rawtypes" })
-  void initInputFormatFromSplit(TezGroupedSplit split) throws TezException {
+  void initInputFormatFromSplit(TezGroupedSplit split) {
     if (wrappedInputFormat == null) {
       Class<? extends InputFormat> clazz = (Class<? extends InputFormat>) 
           getClassFromName(split.wrappedInputFormatName);
       try {
         wrappedInputFormat = org.apache.hadoop.util.ReflectionUtils.newInstance(clazz, conf);
       } catch (Exception e) {
-        throw new TezException(e);
+        throw new TezUncheckedException(e);
       }
     }
   }
 
-  static Class<?> getClassFromName(String name) throws TezException {
+  static Class<?> getClassFromName(String name) {
     return ReflectionUtils.getClazz(name);
   }
 

@@ -28,12 +28,12 @@ import org.apache.tez.common.counters.DAGCounter;
 import org.apache.tez.common.counters.TezCounters;
 import org.apache.tez.dag.api.oldrecords.TaskAttemptReport;
 import org.apache.tez.dag.api.oldrecords.TaskAttemptState;
+import org.apache.tez.dag.history.HistoryEvent;
 import org.apache.tez.dag.records.TaskAttemptTerminationCause;
 import org.apache.tez.dag.records.TezDAGID;
 import org.apache.tez.dag.records.TezTaskAttemptID;
 import org.apache.tez.dag.records.TezTaskID;
 import org.apache.tez.dag.records.TezVertexID;
-import org.apache.tez.runtime.api.impl.TezEvent;
 
 /**
  * Read only view of TaskAttempt.
@@ -79,8 +79,6 @@ public interface TaskAttempt {
   float getProgress();
   TaskAttemptState getState();
   TaskAttemptState getStateNoLock();
-  
-  void setLastEventSent(TezEvent lastEventSent);
 
   /** 
    * Has attempt reached the final state or not.
@@ -124,16 +122,12 @@ public interface TaskAttempt {
    */
   long getLaunchTime();
 
-  /**
-   * Get the time at which this attempt was scheduled
-   * @return the time at which this attempt was scheduled, 0 if it hasn't been scheduled yet
-   */
-  long getScheduleTime();
-
   /** 
    * @return attempt's finish time. If attempt is not finished
    *  yet, returns 0.
    */
   long getFinishTime();
+  
+  TaskAttemptState restoreFromEvent(HistoryEvent event);
 
 }

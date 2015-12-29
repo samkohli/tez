@@ -27,5 +27,6 @@ public enum VertexState {
   KILLED,
   ERROR,
   TERMINATING,
+  RECOVERING,
   COMMITTING,
 }

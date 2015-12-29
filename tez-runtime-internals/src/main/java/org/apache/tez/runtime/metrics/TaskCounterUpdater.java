@@ -23,7 +23,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.apache.tez.util.TezMxBeanResourceCalculator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.hadoop.conf.Configuration;
@@ -44,7 +43,7 @@ import org.apache.tez.dag.api.TezConfiguration;
 public class TaskCounterUpdater {
 
   private static final Logger LOG = LoggerFactory.getLogger(TaskCounterUpdater.class);
-
+  
   private final TezCounters tezCounters;
   private final Configuration conf;
 
@@ -143,12 +142,11 @@ public class TaskCounterUpdater {
   
   private void initResourceCalculatorPlugin() {
     Class<? extends ResourceCalculatorProcessTree> clazz = this.conf.getClass(
-        TezConfiguration.TEZ_TASK_RESOURCE_CALCULATOR_PROCESS_TREE_CLASS,
-        TezMxBeanResourceCalculator.class,
+        TezConfiguration.TEZ_TASK_RESOURCE_CALCULATOR_PROCESS_TREE_CLASS, null,
         ResourceCalculatorProcessTree.class); 
 
     pTree = ResourceCalculatorProcessTree.getResourceCalculatorProcessTree(pid, clazz, conf);
 
-    LOG.info("Using ResourceCalculatorProcessTree : " + clazz.getName());
+    LOG.info(" Using ResourceCalculatorProcessTree : " + pTree);
   }
 }

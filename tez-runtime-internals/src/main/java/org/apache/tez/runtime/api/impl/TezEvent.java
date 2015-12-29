@@ -55,19 +55,12 @@ public class TezEvent implements Writable {
   private EventMetaData sourceInfo;
 
   private EventMetaData destinationInfo;
-  
-  private long eventReceivedTime;
 
   public TezEvent() {
   }
 
   public TezEvent(Event event, EventMetaData sourceInfo) {
-    this(event, sourceInfo, System.currentTimeMillis());
-  }
-  
-  public TezEvent(Event event, EventMetaData sourceInfo, long time) {
     this.event = event;
-    this.eventReceivedTime = time;
     this.setSourceInfo(sourceInfo);
     if (event instanceof DataMovementEvent) {
       eventType = EventType.DATA_MOVEMENT_EVENT;
@@ -98,14 +91,6 @@ public class TezEvent implements Writable {
   public Event getEvent() {
     return event;
   }
-  
-  public void setEventReceivedTime(long eventReceivedTime) { // TODO save
-    this.eventReceivedTime = eventReceivedTime;
-  }
-  
-  public long getEventReceivedTime() {
-    return eventReceivedTime;
-  }
 
   public EventMetaData getSourceInfo() {
     return sourceInfo;
@@ -134,7 +119,6 @@ public class TezEvent implements Writable {
     }
     out.writeBoolean(true);
     out.writeInt(eventType.ordinal());
-    out.writeLong(eventReceivedTime);
     if (eventType.equals(EventType.TASK_STATUS_UPDATE_EVENT)) {
       // TODO NEWTEZ convert to PB
       TaskStatusUpdateEvent sEvt = (TaskStatusUpdateEvent) event;
@@ -204,7 +188,6 @@ public class TezEvent implements Writable {
       return;
     }
     eventType = EventType.values()[in.readInt()];
-    eventReceivedTime = in.readLong();
     if (eventType.equals(EventType.TASK_STATUS_UPDATE_EVENT)) {
       // TODO NEWTEZ convert to PB
       event = new TaskStatusUpdateEvent();
@@ -278,7 +261,7 @@ public class TezEvent implements Writable {
     } else {
       out.writeBoolean(false);
     }
-  } 
+  }
 
   @Override
   public void readFields(DataInput in) throws IOException {

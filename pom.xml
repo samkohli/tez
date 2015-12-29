@@ -19,7 +19,7 @@
   <groupId>org.apache.tez</groupId>
   <artifactId>tez</artifactId>
   <packaging>pom</packaging>
-  <version>0.8.2-SNAPSHOT</version>
+  <version>0.8.0-SNAPSHOT</version>
   <name>tez</name>
 
   <licenses>
@@ -41,7 +41,6 @@
     <jetty.version>6.1.26</jetty.version>
     <pig.version>0.13.0</pig.version>
     <javac.version>1.7</javac.version>
-    <slf4j.version>1.7.10</slf4j.version>
     <enforced.java.version>[${javac.version},)</enforced.java.version>
     <distMgmtSnapshotsId>apache.snapshots.https</distMgmtSnapshotsId>
     <distMgmtSnapshotsName>Apache Development Snapshot Repository</distMgmtSnapshotsName>
@@ -55,9 +54,7 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <scm.url>scm:git:https://git-wip-us.apache.org/repos/asf/tez.git</scm.url>
     <build.time>${maven.build.timestamp}</build.time>
-    <frontend-maven-plugin.version>0.0.23</frontend-maven-plugin.version>
-    <findbugs-maven-plugin.version>3.0.1</findbugs-maven-plugin.version>
-    <javadoc-maven-plugin.version>2.9.1</javadoc-maven-plugin.version>
+    <frontend-maven-plugin.version>0.0.22</frontend-maven-plugin.version>
   </properties>
   <scm>
     <connection>${scm.url}</connection>
@@ -101,17 +98,6 @@
 
   <dependencyManagement>
     <dependencies>
-      <dependency>
-        <groupId>org.apache.tez</groupId>
-        <artifactId>hadoop-shim</artifactId>
-        <version>${project.version}</version>
-      </dependency>
-      <dependency>
-        <groupId>org.apache.tez</groupId>
-        <artifactId>hadoop-shim</artifactId>
-        <version>${project.version}</version>
-        <type>test-jar</type>
-      </dependency>
       <dependency>
         <groupId>org.apache.tez</groupId>
         <artifactId>tez-api</artifactId>
@@ -172,11 +158,6 @@
       </dependency>
       <dependency>
         <groupId>org.apache.tez</groupId>
-        <artifactId>tez-tools</artifactId>
-        <version>${project.version}</version>
-      </dependency>
-      <dependency>
-        <groupId>org.apache.tez</groupId>
         <artifactId>tez-plugins</artifactId>
         <version>${project.version}</version>
       </dependency>
@@ -192,39 +173,24 @@
         <type>test-jar</type>
       </dependency>
       <dependency>
-        <groupId>org.apache.tez</groupId>
-        <artifactId>tez-ext-service-tests</artifactId>
-        <version>${project.version}</version>
-      </dependency>
-      <dependency>
         <groupId>org.apache.pig</groupId>
         <artifactId>pig</artifactId>
         <version>${pig.version}</version>
       </dependency>
       <dependency>
-        <groupId>io.dropwizard.metrics</groupId>
-        <artifactId>metrics-core</artifactId>
-        <version>3.1.0</version>
-      </dependency>
-      <dependency>
-        <groupId>org.roaringbitmap</groupId>
-        <artifactId>RoaringBitmap</artifactId>
-        <version>0.4.9</version>
-      </dependency>
-      <dependency>
         <groupId>org.slf4j</groupId>
         <artifactId>slf4j-api</artifactId>
-        <version>${slf4j.version}</version>
+        <version>1.7.5</version>
       </dependency>
       <dependency>
-        <groupId>com.ning</groupId>
+	      <groupId>com.ning</groupId>
 	      <artifactId>async-http-client</artifactId>
 	      <version>1.8.16</version>
       </dependency>
       <dependency>
         <groupId>org.slf4j</groupId>
         <artifactId>slf4j-log4j12</artifactId>
-        <version>${slf4j.version}</version>
+        <version>1.7.5</version>
       </dependency>
       <dependency>
         <groupId>commons-io</groupId>
@@ -261,7 +227,7 @@
       <dependency>
         <groupId>commons-collections</groupId>
         <artifactId>commons-collections</artifactId>
-        <version>3.2.2</version>
+        <version>3.2.1</version>
       </dependency>
       <dependency>
         <groupId>org.apache.hadoop</groupId>
@@ -337,11 +303,6 @@
             <artifactId>commons-el</artifactId>
           </exclusion>
         </exclusions>
-      </dependency>
-      <dependency>
-        <groupId>org.apache.hadoop</groupId>
-        <artifactId>hadoop-auth</artifactId>
-        <version>${hadoop.version}</version>
       </dependency>
       <dependency>
         <groupId>org.apache.hadoop</groupId>
@@ -633,7 +594,7 @@
       <dependency>
         <groupId>org.apache.commons</groupId>
         <artifactId>commons-collections4</artifactId>
-        <version>4.1</version>
+        <version>4.0</version>
       </dependency>
       <dependency>
         <groupId>org.apache.commons</groupId>
@@ -691,7 +652,6 @@
   </dependencyManagement>
 
   <modules>
-    <module>hadoop-shim</module>
     <module>tez-api</module>
     <module>tez-common</module>
     <module>tez-runtime-library</module>
@@ -700,11 +660,9 @@
     <module>tez-examples</module>
     <module>tez-tests</module>
     <module>tez-dag</module>
-    <module>tez-ext-service-tests</module>
     <module>tez-ui</module>
     <module>tez-plugins</module>
     <module>tez-tools</module>
-    <module>hadoop-shim-impls</module>
     <module>tez-dist</module>
     <module>docs</module>
   </modules>
@@ -765,7 +723,7 @@
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-javadoc-plugin</artifactId>
-          <version>${javadoc-maven-plugin.version}</version>
+          <version>2.9.1</version>
         </plugin>
         <plugin>
           <groupId>org.apache.hadoop</groupId>
@@ -780,7 +738,7 @@
         <plugin>
           <groupId>com.github.eirslett</groupId>
           <artifactId>frontend-maven-plugin</artifactId>
-          <version>${frontend-maven-plugin.version}</version>
+          <version>0.0.23</version>
         </plugin>
         <plugin>
           <artifactId>exec-maven-plugin</artifactId>
@@ -799,25 +757,6 @@
           <configuration>
             <excludes>
               <exclude>CHANGES.txt</exclude>
-              <exclude>**/LICENSE*</exclude>
-              <!-- IDE files -->
-              <exclude>.idea/**</exclude>
-              <exclude>**/*.iml</exclude>
-              <exclude>**/.classpath</exclude>
-              <exclude>**/.project</exclude>
-              <exclude>**/node/**</exclude>
-              <exclude>**/node_modules/**</exclude>
-              <exclude>**/.checkstyle</exclude>
-              <exclude>**/.settings/**</exclude>
-              <exclude>**/maven-eclipse.xml</exclude>
-              <!-- Build directories - target for maven -->
-              <exclude>**/target/**</exclude>
-              <!-- To make developer life easy. Source wont have these files -->
-              <exclude>**/*.diff</exclude>
-              <exclude>*.patch</exclude>
-              <!-- .png files constitute images required for documentation. .pptx contain the sources for images -->
-              <exclude>**/*.png</exclude>
-              <exclude>**/*.pptx</exclude>
             </excludes>
           </configuration>
         </plugin>
@@ -843,7 +782,7 @@
         <plugin>
           <groupId>org.codehaus.mojo</groupId>
           <artifactId>findbugs-maven-plugin</artifactId>
-          <version>${findbugs-maven-plugin.version}</version>
+          <version>3.0.1</version>
         </plugin>
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
@@ -921,14 +860,6 @@
                 </pluginExecution>
               </pluginExecutions>
             </lifecycleMappingMetadata>
-          </configuration>
-        </plugin>
-        <plugin>
-          <groupId>org.apache.maven.plugins</groupId>
-          <artifactId>maven-project-info-reports-plugin</artifactId>
-          <version>2.7</version>
-          <configuration>
-            <dependencyLocationsEnabled>false</dependencyLocationsEnabled>
           </configuration>
         </plugin>
       </plugins>
@@ -1140,7 +1071,6 @@
           <plugin>
             <groupId>org.apache.maven.plugins</groupId>
             <artifactId>maven-javadoc-plugin</artifactId>
-            <version>${javadoc-maven-plugin.version}</version>
             <configuration>
               <docfilessubdirs>true</docfilessubdirs>
             </configuration>
@@ -1179,99 +1109,22 @@
         </plugins>
       </build>
     </profile>
-    <profile>
-      <id>jdk1.7</id>
-      <activation>
-        <jdk>1.7</jdk>
-      </activation>
-      <dependencies>
-        <dependency>
-          <groupId>jdk.tools</groupId>
-          <artifactId>jdk.tools</artifactId>
-          <version>1.7</version>
-          <scope>system</scope>
-          <systemPath>${java.home}/../lib/tools.jar</systemPath>
-        </dependency>
-      </dependencies>
-    </profile>
-    <profile>
-      <id>jdk1.8</id>
-      <activation>
-        <jdk>1.8</jdk>
-      </activation>
-      <dependencies>
-        <dependency>
-          <groupId>jdk.tools</groupId>
-          <artifactId>jdk.tools</artifactId>
-          <version>1.8</version>
-          <scope>system</scope>
-          <systemPath>${java.home}/../lib/tools.jar</systemPath>
-        </dependency>
-      </dependencies>
-    </profile>
-
-    <profile>
-      <activation>
-        <activeByDefault>false</activeByDefault>
-      </activation>
-      <id>aws</id>
-      <dependencies>
-        <dependency>
-          <groupId>org.apache.hadoop</groupId>
-          <artifactId>hadoop-aws</artifactId>
-          <scope>runtime</scope>
-          <version>${hadoop.version}</version>
-        </dependency>
-      </dependencies>
-    </profile>
-    <profile>
-      <activation>
-        <activeByDefault>false</activeByDefault>
-      </activation>
-      <id>azure</id>
-      <dependencies>
-        <dependency>
-          <groupId>org.apache.hadoop</groupId>
-          <artifactId>hadoop-azure</artifactId>
-          <scope>runtime</scope>
-          <version>${hadoop.version}</version>
-        </dependency>
-      </dependencies>
-    </profile>
-
-    <!-- fix for the frontend-maven-plugin - see TEZ-2560 -->
-    <profile>
-      <id>maven304</id>
-      <activation>
-        <property>
-          <name>maven.version</name>
-          <value>3.0.4</value>
-        </property>
-      </activation>
-      <properties>
-        <frontend-maven-plugin.version>0.0.22</frontend-maven-plugin.version>
-      </properties>
-    </profile>
-    <profile>
-      <id>maven305</id>
-      <activation>
-        <property>
-          <name>maven.version</name>
-          <value>3.0.5</value>
-        </property>
-      </activation>
-      <properties>
-        <frontend-maven-plugin.version>0.0.22</frontend-maven-plugin.version>
-      </properties>
-    </profile>
   </profiles>
 
   <reporting>
     <plugins>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-project-info-reports-plugin</artifactId>
+        <version>2.7</version>
+        <configuration>
+          <dependencyLocationsEnabled>false</dependencyLocationsEnabled>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-javadoc-plugin</artifactId>
-        <version>${javadoc-maven-plugin.version}</version>
+        <version>2.9.1</version>
         <reportSets>
           <reportSet>
             <id>aggregate</id>
@@ -1291,6 +1144,13 @@
             </reports>
           </reportSet>
         </reportSets>
+      </plugin>
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>findbugs-maven-plugin</artifactId>
+        <configuration>
+          <excludeFilterFile>${basedir}/findbugs-exclude.xml</excludeFilterFile>
+        </configuration>
       </plugin>
     </plugins>
   </reporting>

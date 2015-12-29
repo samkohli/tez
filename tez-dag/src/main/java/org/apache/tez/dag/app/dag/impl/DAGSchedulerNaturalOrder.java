@@ -26,10 +26,11 @@ import org.apache.tez.dag.app.dag.DAGScheduler;
 import org.apache.tez.dag.app.dag.TaskAttempt;
 import org.apache.tez.dag.app.dag.Vertex;
 import org.apache.tez.dag.app.dag.event.DAGEventSchedulerUpdate;
+import org.apache.tez.dag.app.dag.event.DAGEventSchedulerUpdateTAAssigned;
 import org.apache.tez.dag.app.dag.event.TaskAttemptEventSchedule;
 
 @SuppressWarnings("rawtypes")
-public class DAGSchedulerNaturalOrder extends DAGScheduler {
+public class DAGSchedulerNaturalOrder implements DAGScheduler {
   
   private static final Logger LOG = 
                             LoggerFactory.getLogger(DAGSchedulerNaturalOrder.class);
@@ -43,7 +44,11 @@ public class DAGSchedulerNaturalOrder extends DAGScheduler {
   }
   
   @Override
-  public void scheduleTaskEx(DAGEventSchedulerUpdate event) {
+  public void vertexCompleted(Vertex vertex) {
+  }
+
+  @Override
+  public void scheduleTask(DAGEventSchedulerUpdate event) {
     TaskAttempt attempt = event.getAttempt();
     Vertex vertex = dag.getVertex(attempt.getVertexID());
     int vertexDistanceFromRoot = vertex.getDistanceFromRoot();
@@ -64,7 +69,11 @@ public class DAGSchedulerNaturalOrder extends DAGScheduler {
   }
   
   @Override
-  public void taskCompletedEx(DAGEventSchedulerUpdate event) {
+  public void taskScheduled(DAGEventSchedulerUpdateTAAssigned event) {
+  }
+
+  @Override
+  public void taskSucceeded(DAGEventSchedulerUpdate event) {
   }
   
   @SuppressWarnings("unchecked")

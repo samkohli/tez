@@ -43,20 +43,13 @@ public class FetchResult {
   private final int port;
   private final int partition;
   private final Iterable<InputAttemptIdentifier> pendingInputs;
-  private final String additionalInfo;
 
   public FetchResult(String host, int port, int partition,
       Iterable<InputAttemptIdentifier> pendingInputs) {
-    this(host, port, partition, pendingInputs, null);
-  }
-
-  public FetchResult(String host, int port, int partition,
-      Iterable<InputAttemptIdentifier> pendingInputs, String additionalInfo) {
     this.host = host;
     this.port = port;
     this.partition = partition;
     this.pendingInputs = pendingInputs;
-    this.additionalInfo = additionalInfo;
   }
 
   public String getHost() {
@@ -73,9 +66,5 @@ public class FetchResult {
 
   public Iterable<InputAttemptIdentifier> getPendingInputs() {
     return pendingInputs;
-  }
-
-  public String getAdditionalInfo() {
-    return additionalInfo;
   }
 }

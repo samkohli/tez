@@ -40,7 +40,6 @@ import org.apache.tez.common.security.HistoryACLPolicyManager;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.tez.dag.api.TezConfiguration;
 import org.apache.tez.dag.api.TezConstants;
-import org.apache.tez.dag.api.TezReflectionException;
 import org.apache.tez.dag.api.TezUncheckedException;
 import org.apache.tez.dag.history.DAGHistoryEvent;
 import org.apache.tez.dag.history.HistoryEventType;
@@ -95,6 +94,7 @@ public class ATSHistoryLoggingService extends HistoryLoggingService {
           + TezConfiguration.TEZ_AM_HISTORY_LOGGING_ENABLED + " set to false");
       return;
     }
+    LOG.info("Initializing ATSService");
 
     if (conf.getBoolean(YarnConfiguration.TIMELINE_SERVICE_ENABLED,
       YarnConfiguration.DEFAULT_TIMELINE_SERVICE_ENABLED)) {
@@ -123,17 +123,12 @@ public class ATSHistoryLoggingService extends HistoryLoggingService {
     }
     sessionDomainId = conf.get(TezConfiguration.YARN_ATS_ACL_SESSION_DOMAIN_ID);
 
-    LOG.info("Initializing " + ATSHistoryLoggingService.class.getSimpleName() + " with "
-      + "maxEventsPerBatch=" + maxEventsPerBatch
-      + ", maxPollingTime(ms)=" + maxPollingTimeMillis
-      + ", waitTimeForShutdown(ms)=" + maxTimeToWaitOnShutdown
-      + ", TimelineACLManagerClass=" + atsHistoryACLManagerClassName);
-
+    LOG.info("Using " + atsHistoryACLManagerClassName + " to manage Timeline ACLs");
     try {
       historyACLPolicyManager = ReflectionUtils.createClazzInstance(
           atsHistoryACLManagerClassName);
       historyACLPolicyManager.setConf(conf);
-    } catch (TezReflectionException e) {
+    } catch (TezUncheckedException e) {
       LOG.warn("Could not instantiate object for " + atsHistoryACLManagerClassName
           + ". ACLs cannot be enforced correctly for history data in Timeline", e);
       if (!conf.getBoolean(TezConfiguration.TEZ_AM_ALLOW_DISABLED_TIMELINE_DOMAINS,
@@ -150,6 +145,7 @@ public class ATSHistoryLoggingService extends HistoryLoggingService {
     if (!historyLoggingEnabled || timelineClient == null) {
       return;
     }
+    LOG.info("Starting ATSService");
     timelineClient.start();
 
     eventHandlingThread = new Thread(new Runnable() {
@@ -243,9 +239,6 @@ public class ATSHistoryLoggingService extends HistoryLoggingService {
           + ", eventQueueBacklog=" + eventQueue.size());
     }
     timelineClient.stop();
-    if (historyACLPolicyManager != null) {
-      historyACLPolicyManager.close();
-    }
   }
 
   private void getEventBatch(List<DAGHistoryEvent> events) throws InterruptedException {

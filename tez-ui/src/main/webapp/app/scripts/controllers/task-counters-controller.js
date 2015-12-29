@@ -16,43 +16,7 @@
  * limitations under the License.
  */
 
-App.TaskCountersController = App.PollingController.extend(App.ModelRefreshMixin, {
-  controllerName: 'TaskCountersController',
-
-  pollingType: 'taskInfo',
-
-  pollsterControl: function () {
-    if(this.get('vertex.dag.status') == 'RUNNING' &&
-        this.get('vertex.dag.amWebServiceVersion') != '1' &&
-        this.get('pollingEnabled') &&
-        this.get('isActive')) {
-      this.get('pollster').start();
-    }
-    else {
-      this.get('pollster').stop();
-    }
-  }.observes('vertex.dag.status', 'vertex.dag.amWebServiceVersion', 'isActive', 'pollingEnabled'),
-
-  pollsterOptionsObserver: function () {
-    var model = this.get('model');
-
-    this.get('pollster').setProperties( (model && model.get('status') != 'SUCCEEDED') ? {
-      targetRecords: [model],
-      options: {
-        appID: this.get('vertex.dag.applicationId'),
-        dagID: App.Helpers.misc.getIndexFromId(this.get('dagID')),
-        taskID: '%@_%@'.fmt(
-          App.Helpers.misc.getIndexFromId(this.get('vertexID')),
-          App.Helpers.misc.getIndexFromId(this.get('id'))
-        ),
-        counters: '*'
-      }
-    } : {
-      targetRecords: [],
-      options: null
-    });
-  }.observes('vertex.dag.applicationId', 'status', 'dagID', 'vertexID', 'id'),
-
+App.TaskCountersController = Em.ObjectController.extend(App.ModelRefreshMixin, {
   message: function () {
     var status = this.get('content.status');
     if(!this.get('content.counterGroups.length')) {
@@ -60,10 +24,5 @@ App.TaskCountersController = App.PollingController.extend(App.ModelRefreshMixin,
         return 'Task %@, please check the counters of individual task attempts.'.fmt(status);
       }
     }
-  }.property('content.status', 'content.counterGroups.length'),
-
-  applicationComplete: function () {
-    this.get('pollster').stop();
-    this.set('pollster.polledRecords', null);
-  }
+  }.property('content.status', 'content.counterGroups.length')
 });

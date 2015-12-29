@@ -25,5 +25,4 @@ import org.apache.tez.runtime.api.Event;
 
 public interface ShuffleEventHandler {
   public void handleEvents(List<Event> events) throws IOException;
-  public void logProgress(boolean updateOnClose);
 }

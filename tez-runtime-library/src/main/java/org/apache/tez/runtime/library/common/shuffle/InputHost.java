@@ -38,7 +38,6 @@ public class InputHost {
   private final int port;
   private final int srcPhysicalIndex;
   private final String identifier;
-  private String additionalInfo;
 
   private final BlockingQueue<InputAttemptIdentifier> inputs = new LinkedBlockingQueue<InputAttemptIdentifier>();
 
@@ -63,14 +62,6 @@ public class InputHost {
   
   public String getIdentifier() {
     return this.identifier;
-  }
-
-  public void setAdditionalInfo(String additionalInfo) {
-    this.additionalInfo = additionalInfo;
-  }
-
-  public String getAdditionalInfo() {
-    return (additionalInfo == null) ? "" : additionalInfo;
   }
 
   public int getSrcPhysicalIndex() {

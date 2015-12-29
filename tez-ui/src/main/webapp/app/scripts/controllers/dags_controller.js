@@ -25,8 +25,6 @@ App.DagsController = Em.ObjectController.extend(App.PaginatedContentMixin, App.C
 
 	pageSubTitle: 'All Tez DAGs',
 
-	columnSelectorMessage: 'Logs and counter columns needs more time to load.',
-
   // query parameters supported through url. The same named variables in this controller get
   // bound automatically to the ones defined in the route.
   queryParams: {
@@ -34,11 +32,8 @@ App.DagsController = Em.ObjectController.extend(App.PaginatedContentMixin, App.C
     user_filter: 'user',
     appId_filter: 'appid',
     id_filter: 'id',
-    dagName_filter: 'dag_name',
-    callerId_filter: 'caller_id'
+    dagName_filter: 'dag_name'
   },
-
-  _loadedAllData: false,
 
   fromID: null,
 
@@ -47,7 +42,6 @@ App.DagsController = Em.ObjectController.extend(App.PaginatedContentMixin, App.C
   appId_filter: null,
   id_filter: null,
   dagName_filter: null,
-  callerId_filter: null,
 
   boundFilterValues: Em.Object.create({
     status: null
@@ -65,30 +59,9 @@ App.DagsController = Em.ObjectController.extend(App.PaginatedContentMixin, App.C
       user: this.get('user_filter'),
       appId: this.get('appId_filter'),
       id: this.get('id_filter'),
-      dagName: this.get('dagName_filter'),
-      callerId: this.get('callerId_filter')
+      dagName: this.get('dagName_filter')
     }));
-  }.observes('status_filter', 'user_filter', 'appId_filter', 'dagName_filter', 'id_filter',
-      'callerId_filter'),
-
-  _otherInfoFieldsVisible: function () {
-    var visibleColumns = this.get('visibleColumnIds') || {},
-        columnIds;
-
-    if(visibleColumns['logs']) {
-      return true;
-    }
-
-    columnIds = Object.keys(visibleColumns);
-    for(var i = 0, length = columnIds.length, id; i < length; i++) {
-      id = columnIds[i];
-      if(visibleColumns[id] && id.indexOf('/') != -1) {
-        return true;
-      }
-    }
-
-    return false;
-  }.property('visibleColumnIds'),
+  }.observes('status_filter', 'user_filter', 'appId_filter', 'dagName_filter', 'id_filter'),
 
   _filterVisiblilityObserver: function () {
     var visibleFilters = Em.Object.create();
@@ -105,8 +78,7 @@ App.DagsController = Em.ObjectController.extend(App.PaginatedContentMixin, App.C
       primary: {
         dagName: this.dagName_filter,
         applicationId: this.appId_filter,
-        user: this.user_filter,
-        callerId: this.callerId_filter
+        user: this.user_filter
       },
       secondary: {
       }
@@ -125,103 +97,80 @@ App.DagsController = Em.ObjectController.extend(App.PaginatedContentMixin, App.C
     childEntityType = this.get('childEntityType'),
     finder,
     record;
-    var defaultErrMsg = 'Error while loading DAGs. Either Timeline Server is down, or CORS might not be enabled.';
+    var defaultErrMsg = 'Error while loading dag info.';
 
     that.set('loading', true);
     store.unloadAll(childEntityType);
     store.unloadAll('dagProgress');
 
-    that.set('_loadedAllData', false);
-    function loadAllData() {
-      return store.findQuery(childEntityType, that.getFilterProperties()).then(function (entities) {
-        that.set('_loadedAllData', true);
-        return entities;
-      });
-    }
-
-    function setEntities(entities) {
-      that.set('entities', entities);
-      that.set('loading', false);
-
-      return entities;
-    }
-
-    if(that.id_filter) {
-      finder = store.find(childEntityType, that.id_filter).then(function (entity) {
-        var entities = (
+    if(this.id_filter) {
+      finder = store.find(childEntityType, this.id_filter).then(function (entity) {
+        return (
           (that.dagName_filter && entity.get('name') != that.dagName_filter) ||
           (that.appId_filter && entity.get('applicationId') != that.appId_filter) ||
           (that.user_filter && entity.get('user') != that.user_filter) ||
-          (that.status_filter && entity.get('status') != that.status_filter) ||
-          (that.callerId_filter && entity.get('callerId') != that.callerId_filter)
+          (that.status_filter && entity.get('status') != that.status_filter)
         ) ? [] : [entity];
-
-        return setEntities(entities);
+      }).catch(function () {
+        return [];
       });
     }
     else {
-      // Query just basic data
-      finder = store.findQuery(childEntityType, that.getFilterProperties('events,primaryfilters'));
-      finder = finder.then(setEntities).then(function (entities) {
-
-        // If countersVisible lazy load counters
-        return that.get('_otherInfoFieldsVisible') ? new Promise(function (fullfill) {
-          setTimeout(fullfill, 100); // Lazyload delay
-        }).then(loadAllData) : entities;
-
-      }).catch(function () {
-        // Basic data query failed, probably YARN-3530 fix is not in ATS. Load all data.
-        return loadAllData().then(setEntities);
-      });
+      finder = store.findQuery(childEntityType, this.getFilterProperties());
     }
 
-    finder = finder.then(function(entities){
+    finder.then(function(entities){
+      that.set('entities', entities);
+      that.set('loading', false);
 
       entities.forEach(function (dag) {
         var appId = dag.get('applicationId');
-        if(appId && dag.get('status') === 'RUNNING') {
-          App.Helpers.misc.loadApp(store, appId).then(function (app) {
-            dag.set('appDetail', app);
-            dag.set('status', App.Helpers.misc.getRealStatus(
-              dag.get('status'),
-              app.get('status'),
-              app.get('finalStatus')
-            ));
-          }).finally(function (entities) {
-            if(dag.get('status') === 'RUNNING') {
-              App.Helpers.misc.removeRecord(store, 'dagProgress', dag.get('id'));
-              store.find('dagProgress', dag.get('id'), {
-                appId: dag.get('applicationId'),
-                dagIdx: dag.get('idx')
-              })
-              .then(function(dagProgressInfo) {
-                dag.set('progress', dagProgressInfo.get('progress'));
-              })
-              .catch(function(error) {
-                error.message = "Failed to fetch dagProgress. Application Master (AM) is out of reach. Either it's down, or CORS is not enabled for YARN ResourceManager.";
-                Em.Logger.error(error);
-                var err = App.Helpers.misc.formatError(error);
-                var msg = 'Error code: %@, message: %@'.fmt(err.errCode, err.msg);
-                App.Helpers.ErrorBar.getInstance().show(msg, err.details);
-              });
-            }
-          });
+        if(appId) {
+          record = store.getById('appDetail', appId);
+          if(record && !App.Helpers.misc.isStatusInUnsuccessful(record.get('appState'))) {
+            store.unloadRecord(record);
+          }
         }
       });
+      entities.forEach(function (dag) {
+        var appId = dag.get('applicationId');
+        if(appId) {
+          store.find('appDetail', appId).then(function (app) {
+            dag.set('appDetail', app);
+            if (dag.get('status') === 'RUNNING') {
+              dag.set('status', App.Helpers.misc.getRealStatus(
+                dag.get('status'),
+                app.get('appState'),
+                app.get('finalAppStatus')
+              ));
+            }
+          })
+          .catch(function(error) {
+            Em.Logger.error('Failed to fetch appDetail' + error);
+          });
 
+          if (dag.get('status') === 'RUNNING') {
+            App.Helpers.misc.removeRecord(store, 'dagProgress', dag.get('id'));
+            store.find('dagProgress', dag.get('id'), {
+              appId: dag.get('applicationId'),
+              dagIdx: dag.get('idx')
+            })
+            .then(function(dagProgressInfo) {
+              dag.set('progress', dagProgressInfo.get('progress'));
+            })
+            .catch(function(error) {
+              Em.Logger.error('Failed to fetch dagProgress' + error);
+            });
+          }
+        }
+      });
     }).catch(function(error){
       Em.Logger.error(error);
       var err = App.Helpers.misc.formatError(error, defaultErrMsg);
       var msg = 'error code: %@, message: %@'.fmt(err.errCode, err.msg);
       App.Helpers.ErrorBar.getInstance().show(msg, err.details);
     });
-  },
-
-  _onCountersVisible: function () {
-    if(this.get('_otherInfoFieldsVisible') && !this.get('_loadedAllData')) {
-      Em.run.once(this, this.loadEntities);
-    }
-  }.observes('_otherInfoFieldsVisible'),
+  }.observes('fields'),
 
   actions : {
     filterUpdated: function() {
@@ -233,7 +182,6 @@ App.DagsController = Em.ObjectController.extend(App.PaginatedContentMixin, App.C
         appId_filter: filterValues.get('appId') || null,
         id_filter: filterValues.get('id') || null,
         dagName_filter: filterValues.get('dagName') || null,
-        callerId_filter: filterValues.get('callerId') || null
       });
       this.loadData();
     }
@@ -245,6 +193,24 @@ App.DagsController = Em.ObjectController.extend(App.PaginatedContentMixin, App.C
    */
   defaultColumnConfigs: function () {
     var store = this.get('store');
+
+    function onProgressChange() {
+      var progress = this.get('dag.progress'),
+          pct;
+      if (Ember.typeOf(progress) === 'number') {
+        pct = App.Helpers.number.fractionToPercentage(progress);
+        this.set('progress', pct);
+      }
+    }
+
+    function onStatusChange() {
+      var status = this.get('dag.status');
+      this.setProperties({
+        status: status,
+        statusIcon: App.Helpers.misc.getStatusClassForEntity(status,
+          this.get('dag.hasFailedTaskAttempts'))
+      });
+    }
 
     return [
       {
@@ -277,24 +243,22 @@ App.DagsController = Em.ObjectController.extend(App.PaginatedContentMixin, App.C
         headerCellName: 'Status',
         templateName: 'components/basic-table/status-cell',
         enableFilter: true,
-        contentPath: 'status',
-        observePath: true,
         getCellContent: function(row) {
-          var status = row.get('status');
-          return {
-            status: status,
-            statusIcon: App.Helpers.misc.getStatusClassForEntity(status,
-              row.get('hasFailedTaskAttempts'))
-          };
+          var status = row.get('status'),
+              content = Ember.Object.create({
+                dag: row,
+                status: status,
+                statusIcon: App.Helpers.misc.getStatusClassForEntity(status,
+                  row.get('hasFailedTaskAttempts'))
+              });
+
+          if(status == 'RUNNING') {
+            row.addObserver('progress', content, onProgressChange);
+            row.addObserver('status', content, onStatusChange);
+          }
+
+          return content;
         }
-      },
-      {
-        id: 'progress',
-        headerCellName: 'Progress',
-        contentPath: 'progress',
-        enableFilter: true,
-        observePath: true,
-        templateName: 'components/basic-table/progress-cell'
       },
       {
         id: 'startTime',
@@ -324,11 +288,22 @@ App.DagsController = Em.ObjectController.extend(App.PaginatedContentMixin, App.C
         templateName: 'components/basic-table/linked-cell',
         enableFilter: true,
         getCellContent: function(row) {
-          return {
-            linkTo: 'tez-app',
-            entityId: row.get('applicationId'),
-            displayText: row.get('applicationId')
-          };
+          var appId = row.get('applicationId');
+          if(appId) {
+            return Em.RSVP.allSettled([
+              store.find('appDetail', appId),
+              store.find('tezApp', 'tez_' + appId)
+            ]).then(function (response) {
+              var content = {
+                displayText: row.get('applicationId'),
+                entityId: row.get('applicationId')
+              };
+              if(response.get('0.value') && response.get('1.value')) {
+                content.linkTo = 'tez-app';
+              }
+              return content;
+            });
+          }
         }
       },
       {
@@ -338,31 +313,10 @@ App.DagsController = Em.ObjectController.extend(App.PaginatedContentMixin, App.C
         getCellContent: function(row) {
           var appId = row.get('applicationId');
           if(appId) {
-            return App.Helpers.misc.loadApp(store, appId, true).then(function (app) {
+            return store.find('appDetail', appId).then(function (app) {
               return app.get('queue');
-            }).catch(function(error) {});
+            });
           }
-        }
-      },
-      {
-        id: 'callerId',
-        headerCellName: 'Context ID',
-        enableFilter: true,
-        contentPath: 'callerId'
-      },
-      {
-        id: 'logs',
-        headerCellName: 'Logs',
-        templateName: 'components/basic-table/multi-logs-cell',
-        contentPath: 'containerLogs',
-        observePath: true,
-        getCellContent: function(row) {
-          var containerLogs = row.get('containerLogs');
-          return containerLogs ? {
-            logs: containerLogs
-          } : {
-            isPending: true
-          };
         }
       }
     ];

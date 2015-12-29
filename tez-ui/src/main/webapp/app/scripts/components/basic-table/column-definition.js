@@ -33,8 +33,6 @@ App.BasicTableComponent.ColumnDefinition = (function () {
     headerCellName: "Not Available!",
     searchAndSortable: true,
 
-    onSort: null,
-
     width: "",
 
     customStyle: function () {

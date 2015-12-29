@@ -61,28 +61,28 @@ public abstract class BaseInfo {
    *
    * @return long
    */
-  public abstract long getStartTimeInterval();
+  public abstract long getStartTime();
 
   /**
    * Get finish time w.r.t DAG
    *
    * @return long
    */
-  public abstract long getFinishTimeInterval();
+  public abstract long getFinishTime();
 
   /**
    * Get absolute start time
    *
    * @return long
    */
-  public abstract long getStartTime();
+  public abstract long getAbsStartTime();
 
   /**
    * Get absolute finish time
    *
    * @return long
    */
-  public abstract long getFinishTime();
+  public abstract long getAbsFinishTime();
 
   public abstract String getDiagnostics();
 

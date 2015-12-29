@@ -62,7 +62,6 @@ public class Graph {
     List<Edge> outs;
     String label;
     String shape;
-    String color;
 
     public Node(String id) {
       this(id, null);
@@ -104,10 +103,6 @@ public class Graph {
 
     public void setShape(String shape) {
       this.shape = shape;
-    }
-
-    public void setColor(String color) {
-      this.color = color;
     }
   }
 
@@ -201,19 +196,17 @@ public class Graph {
     for (Node n : nodes) {
       if (n.shape != null && !n.shape.isEmpty()) {
         sb.append(String.format(
-            "%s%s [ label = %s, shape = %s , color= %s];",
+            "%s%s [ label = %s, shape = %s ];",
             indent,
             wrapSafeString(n.getUniqueId()),
             wrapSafeString(n.getLabel()),
-            wrapSafeString(n.shape),
-            wrapSafeString(n.color == null ? "black" : n.color)));
+            wrapSafeString(n.shape)));
       } else {
         sb.append(String.format(
-            "%s%s [ label = %s , color= %s ];",
+            "%s%s [ label = %s ];",
             indent,
             wrapSafeString(n.getUniqueId()),
-            wrapSafeString(n.getLabel()),
-            wrapSafeString(n.color == null ? "black" : n.color)));
+            wrapSafeString(n.getLabel())));
       }
       sb.append(System.getProperty("line.separator"));
       List<Edge> combinedOuts = combineEdges(n.outs);

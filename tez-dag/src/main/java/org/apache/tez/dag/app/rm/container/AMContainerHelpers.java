@@ -113,10 +113,8 @@ public class AMContainerHelpers {
       // correctly, even though they may not be used by all tasks which will run
       // on this container.
 
-      if (LOG.isDebugEnabled()) {
-        LOG.debug("Adding #" + credentials.numberOfTokens() + " tokens and #"
-            + credentials.numberOfSecretKeys() + " secret keys for NM use for launching container in common CLC");
-      }
+      LOG.info("Adding #" + credentials.numberOfTokens() + " tokens and #"
+          + credentials.numberOfSecretKeys() + " secret keys for NM use for launching container");
       containerCredentials.addAll(credentials);
 
       DataOutputBuffer containerTokens_dob = new DataOutputBuffer();
@@ -125,9 +123,7 @@ public class AMContainerHelpers {
           containerTokens_dob.getLength());
 
       // Add shuffle token
-      if (LOG.isDebugEnabled()) {
-        LOG.debug("Putting shuffle token in serviceData in common CLC");
-      }
+      LOG.info("Putting shuffle token in serviceData");
       serviceData.put(TezConstants.TEZ_SHUFFLE_HANDLER_SERVICE_ID,
           TezCommonUtils.serializeServiceData(TokenCache.getSessionToken(containerCredentials)));
     } catch (IOException e) {

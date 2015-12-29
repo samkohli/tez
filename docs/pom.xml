@@ -27,7 +27,7 @@
     <parent>
       <groupId>org.apache.tez</groupId>
       <artifactId>tez</artifactId>
-      <version>0.8.2-SNAPSHOT</version>
+      <version>0.8.0-SNAPSHOT</version>
     </parent>
     <artifactId>tez-docs</artifactId>
     <packaging>pom</packaging>
@@ -444,7 +444,6 @@
           <artifactId>maven-project-info-reports-plugin</artifactId>
           <configuration>
             <customBundle>${project.basedir}/src/site/custom/project-info-report.properties</customBundle>
-            <dependencyLocationsEnabled>false</dependencyLocationsEnabled>
           </configuration>
           <reportSets>
             <reportSet>

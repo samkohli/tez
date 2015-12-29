@@ -28,38 +28,6 @@ App.VertexTasksController = App.TablePageController.extend(App.AutoCounterColumn
 
   cacheDomain: Ember.computed.alias('controllers.vertex.dagID'),
 
-  pollingType: 'taskInfo',
-
-  pollsterControl: function () {
-    if(this.get('dag.status') == 'RUNNING' &&
-        this.get('dag.amWebServiceVersion') != '1' &&
-        !this.get('loading') && this.get('isActive') &&
-        this.get('pollingEnabled') &&
-        this.get('rowsDisplayed.length') > 0) {
-      this.get('pollster').start();
-    }
-    else {
-      this.get('pollster').stop();
-    }
-  }.observes('dag.status', 'dag.amWebServiceVersion', 'rowsDisplayed', 'loading', 'isActive', 'pollingEnabled'),
-
-  pollsterOptionsObserver: function () {
-    this.set('pollster.options', {
-      appID: this.get('dag.applicationId'),
-      dagID: this.get('dag.idx'),
-      counters: this.get('countersDisplayed'),
-      taskID: this.get('rowsDisplayed').map(function (row) {
-          var taskIndex = App.Helpers.misc.getIndexFromId(row.get('id')),
-          vertexIndex = App.Helpers.misc.getIndexFromId(row.get('vertexID'));
-          return '%@_%@'.fmt(vertexIndex, taskIndex);
-        }).join(',')
-    });
-  }.observes('dag.applicationId', 'dag.idx', 'rowsDisplayed'),
-
-  countersDisplayed: function () {
-    return App.Helpers.misc.getCounterQueryParam(this.get('columns'));
-  }.property('columns'),
-
   beforeLoad: function () {
     var controller = this.get('controllers.vertex'),
         model = controller.get('model');
@@ -128,8 +96,6 @@ App.VertexTasksController = App.TablePageController.extend(App.AutoCounterColumn
         headerCellName: 'Status',
         templateName: 'components/basic-table/status-cell',
         contentPath: 'status',
-        observePath: true,
-        onSort: this.onInProgressColumnSort.bind(this),
         getCellContent: function(row) {
           var status = row.get('status');
           return {
@@ -138,14 +104,6 @@ App.VertexTasksController = App.TablePageController.extend(App.AutoCounterColumn
               row.get('hasFailedTaskAttempts'))
           };
         }
-      },
-      {
-        id: 'progress',
-        headerCellName: 'Progress',
-        contentPath: 'progress',
-        observePath: true,
-        onSort: this.onInProgressColumnSort.bind(this),
-        templateName: 'components/basic-table/progress-cell'
       },
       {
         id: 'startTime',

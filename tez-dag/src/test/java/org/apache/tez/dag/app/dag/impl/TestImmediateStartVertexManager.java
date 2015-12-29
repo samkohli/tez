@@ -28,10 +28,9 @@ import org.apache.tez.dag.api.InputDescriptor;
 import org.apache.tez.dag.api.OutputDescriptor;
 import org.apache.tez.dag.api.VertexManagerPluginContext;
 import org.apache.tez.dag.api.EdgeProperty.SchedulingType;
-import org.apache.tez.dag.api.VertexManagerPluginContext.ScheduleTaskRequest;
+import org.apache.tez.dag.api.VertexManagerPluginContext.TaskWithLocationHint;
 import org.apache.tez.dag.api.event.VertexState;
 import org.apache.tez.dag.api.event.VertexStateUpdate;
-import org.apache.tez.runtime.api.TaskAttemptIdentifier;
 import org.junit.Assert;
 import org.junit.Test;
 import org.mockito.invocation.InvocationOnMock;
@@ -93,25 +92,24 @@ public class TestImmediateStartVertexManager {
       public Object answer(InvocationOnMock invocation) {
           Object[] args = invocation.getArguments();
           scheduledTasks.clear();
-          List<ScheduleTaskRequest> tasks = (List<ScheduleTaskRequest>)args[0];
-          for (ScheduleTaskRequest task : tasks) {
+          List<TaskWithLocationHint> tasks = (List<TaskWithLocationHint>)args[0];
+          for (TaskWithLocationHint task : tasks) {
             scheduledTasks.add(task.getTaskIndex());
           }
           return null;
-      }}).when(mockContext).scheduleTasks(anyList());
+      }}).when(mockContext).scheduleVertexTasks(anyList());
     
-    List<TaskAttemptIdentifier> emptyCompletions = null;
     ImmediateStartVertexManager manager = new ImmediateStartVertexManager(mockContext);
     manager.initialize();
-    manager.onVertexStarted(emptyCompletions);
-    verify(mockContext, times(0)).scheduleTasks(anyList());
+    manager.onVertexStarted(null);
+    verify(mockContext, times(0)).scheduleVertexTasks(anyList());
     manager.onVertexStateUpdated(new VertexStateUpdate(mockSrcVertexId1,
         VertexState.CONFIGURED));
     manager.onVertexStateUpdated(new VertexStateUpdate(mockSrcVertexId2,
         VertexState.CONFIGURED));
     manager.onVertexStateUpdated(new VertexStateUpdate(mockSrcVertexId3,
         VertexState.CONFIGURED));
-    verify(mockContext, times(1)).scheduleTasks(anyList());
+    verify(mockContext, times(1)).scheduleVertexTasks(anyList());
     Assert.assertEquals(4, scheduledTasks.size());
 
     // simulate race between onVertexStarted and notifications
@@ -125,8 +123,8 @@ public class TestImmediateStartVertexManager {
         return null;
     }}).when(mockContext).registerForVertexStateUpdates(anyString(), anySet());
     raceManager.initialize();
-    raceManager.onVertexStarted(emptyCompletions);
-    verify(mockContext, times(2)).scheduleTasks(anyList());
+    raceManager.onVertexStarted(null);
+    verify(mockContext, times(2)).scheduleVertexTasks(anyList());
     Assert.assertEquals(4, scheduledTasks.size());
   }
   

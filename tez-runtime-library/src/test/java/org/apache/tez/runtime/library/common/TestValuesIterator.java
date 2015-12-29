@@ -224,7 +224,6 @@ public class TestValuesIterator {
     }
   }
 
-  @SuppressWarnings("unchecked")
   private ValuesIterator createEmptyIterator(boolean inMemory)
       throws IOException, InterruptedException {
     if (!inMemory) {
@@ -258,7 +257,6 @@ public class TestValuesIterator {
    * @return List
    * @throws IOException
    */
-  @SuppressWarnings("unchecked")
   private List<Integer> verifyIteratorData(
       ValuesIterator valuesIterator) throws IOException {
     boolean result = true;
@@ -326,7 +324,6 @@ public class TestValuesIterator {
    * @return ValuesIterator
    * @throws IOException
    */
-  @SuppressWarnings("unchecked")
   private ValuesIterator createIterator(boolean inMemory) throws IOException, InterruptedException {
     if (!inMemory) {
       streamPaths = createFiles();
@@ -357,7 +354,6 @@ public class TestValuesIterator {
    * @return ValuesIterator
    * @throws IOException
    */
-  @SuppressWarnings("unchecked")
   private ValuesIterator createCountedIterator(boolean inMemory, TezCounter keyCounter, TezCounter tupleCounter)
       throws IOException, InterruptedException {
     if (!inMemory) {
@@ -482,7 +478,6 @@ public class TestValuesIterator {
    * @return
    * @throws IOException
    */
-  @SuppressWarnings("unchecked")
   public List<TezMerger.Segment> createInMemStreams() throws IOException {
     int numberOfStreams = Math.max(2, rnd.nextInt(10));
     LOG.info("No of streams : " + numberOfStreams);
@@ -545,7 +540,6 @@ public class TestValuesIterator {
     return inputContext;
   }
 
-  @SuppressWarnings("unchecked")
   private Map<Writable, Writable> createData() {
     Map<Writable, Writable> map = new TreeMap<Writable, Writable>(comparator);
     for (int j = 0; j < Math.max(10, rnd.nextInt(50)); j++) {

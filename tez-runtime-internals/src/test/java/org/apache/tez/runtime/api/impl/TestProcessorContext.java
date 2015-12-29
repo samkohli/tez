@@ -16,23 +16,23 @@ package org.apache.tez.runtime.api.impl;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
-import static org.mockito.Mockito.*;
+import static org.mockito.Matchers.any;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
 
-import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.Map;
 
 import com.google.common.collect.Maps;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.yarn.api.records.ApplicationId;
+import org.apache.tez.common.counters.TezCounters;
 import org.apache.tez.dag.api.ProcessorDescriptor;
 import org.apache.tez.dag.records.TezDAGID;
 import org.apache.tez.dag.records.TezTaskAttemptID;
 import org.apache.tez.dag.records.TezTaskID;
 import org.apache.tez.dag.records.TezVertexID;
-import org.apache.tez.hadoop.shim.DefaultHadoopShim;
 import org.apache.tez.runtime.InputReadyTracker;
 import org.apache.tez.runtime.LogicalIOProcessorRuntimeTask;
 import org.apache.tez.runtime.api.ExecutionContext;
@@ -44,7 +44,7 @@ import org.junit.Test;
 public class TestProcessorContext {
 
   @Test (timeout = 5000)
-  public void testDagNumber() throws IOException {
+  public void testDagNumber() {
     String[] localDirs = new String[] {"dummyLocalDir"};
     int appAttemptNumber = 1;
     TezUmbilical tezUmbilical = mock(TezUmbilical.class);
@@ -58,14 +58,8 @@ public class TestProcessorContext {
     TezTaskID taskId = TezTaskID.getInstance(vertexId, 4);
     TezTaskAttemptID taskAttemptId = TezTaskAttemptID.getInstance(taskId, 2);
 
-    TaskSpec mockSpec = mock(TaskSpec.class);
-    when(mockSpec.getInputs()).thenReturn(Collections.singletonList(mock(InputSpec.class)));
-    when(mockSpec.getOutputs()).thenReturn(Collections.singletonList(mock(OutputSpec.class)));
-    LogicalIOProcessorRuntimeTask runtimeTask = new LogicalIOProcessorRuntimeTask(
-        mockSpec, 1, 
-        new Configuration(), new String[]{"/"}, 
-        tezUmbilical, null, null, null, null, "", null, 1024, false, new DefaultHadoopShim());
-    LogicalIOProcessorRuntimeTask mockTask = spy(runtimeTask);
+    LogicalIOProcessorRuntimeTask runtimeTask = mock(LogicalIOProcessorRuntimeTask.class);
+    doReturn(new TezCounters()).when(runtimeTask).addAndGetTezCounter(any(String.class));
     Map<String, ByteBuffer> serviceConsumerMetadata = Maps.newHashMap();
     Map<String, String> auxServiceEnv = Maps.newHashMap();
     MemoryDistributor memDist = mock(MemoryDistributor.class);
@@ -104,8 +98,5 @@ public class TestProcessorContext {
     assertEquals(vertexId.getId(), procContext.getTaskVertexIndex());
     assertTrue(Arrays.equals(localDirs, procContext.getWorkDirs()));
 
-     // test auto call of notifyProgress
-     procContext.setProgress(0.1f);
-     verify(mockTask, times(1)).notifyProgressInvocation();
   }
 }

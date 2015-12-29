@@ -173,7 +173,6 @@ public class RandomTextWriter extends Configured implements Tool {
    * 
    * @throws IOException 
    */
-  @SuppressWarnings("deprecation")
   public int run(String[] args) throws Exception {    
     if (args.length == 0) {
       return printUsage();    
